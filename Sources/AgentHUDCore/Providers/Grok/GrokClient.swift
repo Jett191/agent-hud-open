@@ -173,7 +173,7 @@ struct GrokClient: Sendable {
         return selected
     }
 
-    private static func loginEntries(_ json: ProviderJSON) -> [ProviderJSON] {
+    static func loginEntries(_ json: ProviderJSON) -> [ProviderJSON] {
         (json.objectValue ?? [:]).filter { key, _ in
             key.hasPrefix("https://auth.x.ai::") || key == "https://accounts.x.ai/sign-in"
         }.sorted { lhs, rhs in

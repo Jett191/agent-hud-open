@@ -75,6 +75,32 @@ final class GrokCLIRenewalTests: XCTestCase {
         XCTAssertTrue(calls.tokens.isEmpty)
     }
 
+    func testFailedRenewalsDoubleThePauseUpToItsLimitAndARenewalResetsIt() {
+        var schedule = GrokCLIRenewal.Schedule()
+        XCTAssertTrue(schedule.begin(at: now))
+        XCTAssertFalse(schedule.begin(at: now.addingTimeInterval(899)), "No second attempt inside 15 minutes")
+        schedule.finish(renewed: false)
+        XCTAssertFalse(schedule.begin(at: now.addingTimeInterval(1_799)))
+        XCTAssertTrue(schedule.begin(at: now.addingTimeInterval(1_800)), "A failure doubles the pause to 30 minutes")
+
+        for _ in 0..<10 { schedule.finish(renewed: false) }
+        XCTAssertEqual(schedule.pause, GrokCLIRenewal.longestPause)
+        XCTAssertFalse(schedule.begin(at: now.addingTimeInterval(1_800 + 4 * 3600 - 1)))
+        XCTAssertTrue(schedule.begin(at: now.addingTimeInterval(1_800 + 4 * 3600)))
+
+        schedule.finish(renewed: true)
+        XCTAssertEqual(schedule.pause, GrokCLIRenewal.retryInterval)
+    }
+
+    func testOnlyTheInstalledGrokCLIIsStarted() {
+        let home = URL(fileURLWithPath: "/Users/fixture")
+        XCTAssertEqual(GrokCLIRenewal.candidates(home: home, grokHome: home.appendingPathComponent(".grok")).map(\.path),
+                       ["/Users/fixture/.grok/bin/grok"])
+        XCTAssertEqual(GrokCLIRenewal.candidates(home: home, grokHome: URL(fileURLWithPath: "/Volumes/grok")).map(\.path),
+                       ["/Volumes/grok/bin/grok", "/Users/fixture/.grok/bin/grok"],
+                       "Never `PATH`, Homebrew or ~/.local/bin, where another program named grok may be")
+    }
+
     func testRenewableNeedsEveryLoginExpiredAndOneRefreshToken() throws {
         func entries(_ text: String) throws -> [ProviderJSON] {
             try ProviderJSON.read(Data(text.utf8)).objectValue.map { Array($0.values) } ?? []
