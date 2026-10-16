@@ -131,6 +131,9 @@ struct ProviderSession: Sendable {
     var completions: [SessionCompletion] = []
     var accountWide = false
     var navigationTarget: SessionNavigationTarget? = nil
+
+    /// When the session last did something: its last activity, else its newest event.
+    var lastSeen: Date? { lastActivity ?? events.map(\.timestamp).max() }
 }
 
 struct ProviderEvent: Hashable, Sendable {

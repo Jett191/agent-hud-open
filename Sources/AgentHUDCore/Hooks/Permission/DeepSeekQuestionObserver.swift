@@ -178,11 +178,13 @@ public final class DeepSeekQuestionObserver {
     nonisolated static let defaultPort = 3080
 
     /// The Harness web hosts running right now: processes whose command names the Harness entry and a web profile.
-    /// A port named on the command line is what the host serves; without one, the default.
+    /// A port named on the command line is what the host serves; without one, the default. A Mac without Harness's
+    /// home, which its CLI and desktop app share, has no host to find, and its processes are not listed.
     nonisolated static func discoverPorts(
+        isPresent: @Sendable () -> Bool = { DeepSeekLocator.isInstalled() },
         inspect: @Sendable (String, [String]) async throws -> String = ProviderCommand.run
     ) async -> [Int] {
-        guard let output = try? await inspect("/bin/ps", ["-U", String(getuid()), "-o", "pid=,command="]) else { return [] }
+        guard isPresent(), let output = try? await inspect("/bin/ps", ["-U", String(getuid()), "-o", "pid=,command="]) else { return [] }
         var ports: Set<Int> = []
         // Only a web profile's host asks questions; the lines of every other process are never taken apart.
         for line in ProcessLines.mentioning(["--profile web", "--profile=web"], in: output) {

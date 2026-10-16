@@ -1,13 +1,19 @@
 import Foundation
 import Observation
 
-/// Persists `Settings`, the ordered agent list and onboarding state in UserDefaults as JSON.
+/// Persists `Settings`, the ordered agent list and onboarding state in UserDefaults as JSON, and holds the store of the
+/// hover panel's layout, which keeps its own value there.
 @MainActor
 @Observable
 public final class SettingsStore {
     public private(set) var settings: Settings
     public private(set) var agents: [AgentDescriptor]
     public private(set) var hasCompletedOnboarding: Bool
+    /// The hover panel's layouts, the shared one and each screen's own, kept in the same defaults under their own key,
+    /// and each screen's style draft. They change apart from the settings and the agent list: `onChange` hears nothing
+    /// of them, so a layout change never wakes collection. Only a person's Save, revert or reset of a screen's version
+    /// writes its style into the settings, as one settings change.
+    public let panelLayout: PanelLayoutStore
 
     public enum Change { case settings, agents, discovery }
     /// Invoked after preferences are persisted and local state is updated. A running `UsageStore` sets it, to wake
@@ -22,6 +28,9 @@ public final class SettingsStore {
         public static let settings = "settings.v1"
         public static let agents = "agents.v5"
         public static let onboarding = "onboarding.completed.v1"
+        /// The saved panel layouts, the shared one and each screen's own (`PanelLayoutStorage`). The first format,
+        /// `panelLayout.v1`, was never released and is not read.
+        public static let panelLayout = "panelLayout.v2"
     }
 
     /// Rows come from providers; `defaultAgents` seeds a store for the demo and tests.
@@ -40,6 +49,9 @@ public final class SettingsStore {
             agents = defaultAgents.groupedAgentOrder
         }
         hasCompletedOnboarding = defaults.bool(forKey: Keys.onboarding)
+        panelLayout = PanelLayoutStore(defaults: defaults)
+        // A screen's style draft is drawn over these settings, and a person's Save writes it into them.
+        panelLayout.owner = self
         let normalized = applyingAccountVisibility(to: agents)
         if normalized != agents {
             agents = normalized

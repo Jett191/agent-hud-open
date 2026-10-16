@@ -5,7 +5,12 @@ public enum AppSupport {
     public static var directory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        let name = Bundle.main.object(forInfoDictionaryKey: "AgentHUDDataDirectory") as? String ?? "Agent HUD Open"
-        return base.appendingPathComponent(name, isDirectory: true)
+        return base.appendingPathComponent(directoryName(of: .main), isDirectory: true)
+    }
+
+    /// The name of the data directory the application in `bundle` keeps: its `AgentHUDDataDirectory`, else
+    /// `Agent HUD Open`, as for an executable outside a bundle.
+    static func directoryName(of bundle: Bundle?) -> String {
+        bundle?.object(forInfoDictionaryKey: "AgentHUDDataDirectory") as? String ?? "Agent HUD Open"
     }
 }

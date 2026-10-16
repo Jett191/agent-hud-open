@@ -107,6 +107,9 @@ public struct Settings: Hashable, Codable, Sendable {
     /// Whether Agent HUD keeps its handlers in the clients' own settings: approvals, Claude Code's notification
     /// hook, the stop hooks and Pi's observer. Off, they are removed and never added back.
     public var clientHooks: Bool = true
+    /// Whether the application answers the MCP tools through which an agent reads and drafts the panel and the resting
+    /// HUD (Settings → Experimental). Off until a person turns it on; while it is off a client's call is told so.
+    public var agentTools: Bool = false
     /// How long a permission request waits on the HUD for an answer before it goes back to the client's own prompt.
     public var approvalWaitMinutes: Int = 10
     public static let approvalWaitChoices = [1, 3, 5, 10, 30, 60]
@@ -131,7 +134,7 @@ public struct Settings: Hashable, Codable, Sendable {
         case glowStyle, glowGridPitch, glowGridSpread, glowGridCore, glowGridFade, glowGridDensity, glowEffect
         case requiresOptionToOpen, openImmediatelyAtTop, hoverDelayMs, collapseDelayMs, showResetCountdown
         case showIslandQuota, showIslandTokens, showIslandSessions, botLogos, hiddenAccountIDs
-        case liveStatusPreferences, disabledLiveStatusSources, readCopilotQuota, clientHooks, approvalWaitMinutes
+        case liveStatusPreferences, disabledLiveStatusSources, readCopilotQuota, clientHooks, agentTools, approvalWaitMinutes
         case launchAtLogin, showMenuBarIcon, appearance, language, screens, screenGlow
     }
 
@@ -180,6 +183,7 @@ public struct Settings: Hashable, Codable, Sendable {
         }
         readCopilotQuota = try c.decodeIfPresent(Bool.self, forKey: .readCopilotQuota) ?? d.readCopilotQuota
         clientHooks = try c.decodeIfPresent(Bool.self, forKey: .clientHooks) ?? d.clientHooks
+        agentTools = try c.decodeIfPresent(Bool.self, forKey: .agentTools) ?? d.agentTools
         approvalWaitMinutes = (try c.decodeIfPresent(Int.self, forKey: .approvalWaitMinutes))
             .flatMap { Self.approvalWaitChoices.contains($0) ? $0 : nil } ?? d.approvalWaitMinutes
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
@@ -218,6 +222,7 @@ public struct Settings: Hashable, Codable, Sendable {
         try c.encode(liveStatusPreferences, forKey: .liveStatusPreferences)
         try c.encode(readCopilotQuota, forKey: .readCopilotQuota)
         try c.encode(clientHooks, forKey: .clientHooks)
+        try c.encode(agentTools, forKey: .agentTools)
         try c.encode(approvalWaitMinutes, forKey: .approvalWaitMinutes)
         try c.encode(launchAtLogin, forKey: .launchAtLogin)
         try c.encode(showMenuBarIcon, forKey: .showMenuBarIcon)

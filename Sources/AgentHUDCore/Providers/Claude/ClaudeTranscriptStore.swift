@@ -104,8 +104,9 @@ enum ClaudeTranscripts: TailLog {
     static let source = "claude"
     static let summaryKey = "accumulator"
     /// 2: cache writes, thinking, prompts and compactions. 3: the session's given and generated titles. 4: the lines a
-    /// fork copied from its parent, and the older copies of a session's log, no longer count.
-    static let version = 4
+    /// fork copied from its parent, and the older copies of a session's log, no longer count. 5: read from the newest
+    /// turn first and back through the history; usage without a response id is keyed by its place in the log.
+    static let version = 5
 
     static func summary(for url: URL) -> TranscriptAccumulator {
         TranscriptAccumulator(path: url.path, isSubagent: ClaudeTranscriptStore.isSubagent(url))
@@ -118,10 +119,30 @@ enum ClaudeTranscripts: TailLog {
         return ClaudeTranscriptStore.isSubagent(url) ? nil : url.lastPathComponent
     }
 
-    static func ingest(_ lines: Data, into accumulator: inout TranscriptAccumulator) -> [UsageLedger.Event] {
+    static func ingest(_ lines: Data, at offset: Int, into accumulator: inout TranscriptAccumulator) -> [UsageLedger.Event] {
         let titles = FastTranscriptParser.titles(in: lines, session: accumulator.ownSession)
         accumulator.noteTitles(custom: titles.custom, generated: titles.generated)
-        return accumulator.ingest(FastTranscriptParser.parse(lines))
+        return accumulator.ingest(FastTranscriptParser.parse(lines, at: offset))
+    }
+
+    /// A turn starts at a prompt the user gave, or one the client raised itself, such as a background task's notice; a
+    /// tool result, command output, injected context, a compaction's summary and an interruption do not. The role is
+    /// near a line's start, so most lines are told apart by their first bytes.
+    static let startsTurn: LogPager.StartsTurn? = { prefix, line in
+        guard prefix.range(of: userRole) != nil || prefix.range(of: userType) != nil, prefix.range(of: toolResult) == nil,
+              let event = FastTranscriptParser.parseLine(try line()) else { return false }
+        return event.isPrompt && !event.isSidechain && event.text?.hasPrefix("[Request interrupted") != true
+    }
+    private static let userRole = Data(#""role":"user""#.utf8)
+    private static let userType = Data(#""type":"user""#.utf8)
+    private static let toolResult = Data(#""type":"tool_result""#.utf8)
+
+    static func head(_ lines: Data, into accumulator: inout TranscriptAccumulator) {
+        accumulator.readHead(FastTranscriptParser.parse(lines))
+    }
+
+    static func merge(older: TranscriptAccumulator, into accumulator: inout TranscriptAccumulator) {
+        accumulator.merge(older: older)
     }
 
     static func drainMarks(_ accumulator: inout TranscriptAccumulator) -> [UsageLedger.Mark] { accumulator.drainMarks() }

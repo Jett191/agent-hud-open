@@ -27,12 +27,20 @@ final class DeepSeekQuestionObserverTests: XCTestCase {
         12 /usr/local/bin/dsh --profile=web --x--port=9994 --portExtra=9993
         """
         let output = unrelated + "\n" + fixture
-        let ports = await DeepSeekQuestionObserver.discoverPorts(inspect: { _, _ in output })
+        let ports = await DeepSeekQuestionObserver.discoverPorts(isPresent: { true }, inspect: { _, _ in output })
         XCTAssertEqual(ports, [DeepSeekQuestionObserver.defaultPort, 4599, 5600, 6000, 65535])
         XCTAssertTrue(DeepSeekQuestionObserver.isHarness("/usr/local/bin/dsh --profile=web-preview"),
                       "the existing profile prefix match remains unchanged")
         XCTAssertFalse(DeepSeekQuestionObserver.isHarness("/usr/local/bin/dsh --profile  web"),
                        "discovery keeps the existing literal web-profile syntax")
+    }
+
+    func testAMacWithoutHarnessListsNoProcesses() async {
+        let ports = await DeepSeekQuestionObserver.discoverPorts(isPresent: { false }, inspect: { executable, _ in
+            XCTFail("with nothing to look for, \(executable) must not run")
+            return "1 /usr/local/bin/dsh --profile web --port 4599"
+        })
+        XCTAssertTrue(ports.isEmpty)
     }
 
     private func frame(_ id: String) -> ProviderJSON {

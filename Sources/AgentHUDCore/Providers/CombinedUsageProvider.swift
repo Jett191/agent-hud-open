@@ -146,9 +146,13 @@ public struct CombinedUsageProvider: UsageProvider {
         let reported = results.filter { !(vendors[$0.0].provider is any LedgerRecording) }.flatMap { $0.1?.usage ?? [] }
         let since = min(now.addingTimeInterval(-UsageLedger.retention), now.addingTimeInterval(-Double(historyHours) * 3600))
         let usage = ((try? await ledger.buckets(since: since)) ?? []) + reported
+        // What calls sent again after the cache lapsed comes from the ledger too, so a range's figure covers its month of
+        // sessions, not only those a report lists.
+        let recached = try? await ledger.recachedBuckets(since: since)
         var periods = (try? await ledger.periods(endingAt: now)) ?? UsagePeriods()
         periods.add(reported, endingAt: now)
-        let sessions = GrokBotUsage.merge(reports.flatMap(\.sessions), routineRuns: await grokBotRoutineRuns?.links ?? [:])
+        let sessions = GrokBotUsage.merge(reports.flatMap(\.sessions), routineRuns: await grokBotRoutineRuns?.links ?? [:],
+                                          listedSince: SessionWindow.start(at: now))
         let progress = reports.compactMap(\.indexing)
         let sessionUsage = await breakdowns(of: sessions)
         return UsageReport(generatedAt: now, snapshots: Dictionary(grouping: reports.flatMap(\.snapshots), by: \.agentId).values.compactMap { $0.max { $0.updatedAt < $1.updatedAt } }.sorted { $0.agentId < $1.agentId },
@@ -175,7 +179,7 @@ public struct CombinedUsageProvider: UsageProvider {
                                $0.merge($1, uniquingKeysWith: +)
                            },
                            forgottenAccountProviders: reports.compactMap(\.forgottenAccountProviders).reduce(nil) { ($0 ?? []).union($1) },
-                           sessionUsage: sessionUsage, periods: periods)
+                           sessionUsage: sessionUsage, periods: periods, recached: recached)
     }
 
     /// Where each session's tokens went. A session is read again when its counts move or when the ledger has written any

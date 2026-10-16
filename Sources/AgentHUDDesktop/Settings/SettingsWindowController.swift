@@ -6,7 +6,8 @@ final class SettingsWindowController: HostedWindowController {
     private let navigation = SettingsNavigation()
     private let pageIDs: Set<String>
 
-    init(settings: SettingsStore, store: UsageStore, additionalPages: [DesktopSettingsPage] = []) {
+    init(settings: SettingsStore, store: UsageStore, additionalPages: [DesktopSettingsPage] = [],
+         experimentalSections: [DesktopSettingsSection] = []) {
         pageIDs = Set(SettingsTab.allCases.map(\.id) + additionalPages.map(\.id))
         var size = SettingsWindowLayout.size
         if let contentWidth = additionalPages.compactMap(\.preferredContentWidth).max() {
@@ -16,7 +17,8 @@ final class SettingsWindowController: HostedWindowController {
         // Custom controls handle their own drags; only the title bar should move this window.
         window?.isMovableByWindowBackground = false
         window?.minSize = SettingsWindowLayout.minimum
-        setContent(SettingsView(settings: settings, store: store, navigation: navigation, additionalPages: additionalPages))
+        setContent(SettingsView(settings: settings, store: store, navigation: navigation, additionalPages: additionalPages,
+                                experimentalSections: experimentalSections))
     }
 
     private static var title: String { AppResources.applicationName + L10n.text(" 设置", " Settings") }

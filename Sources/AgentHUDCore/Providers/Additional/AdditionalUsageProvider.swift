@@ -131,14 +131,21 @@ actor AdditionalUsageProvider: UsageProvider, LedgerRecording {
                 }
             }
         }
+        // Tokens and models come from every session of `historyHours`; sessions, their turns and completions, and the
+        // completion hooks' records only from those active in the session window. A billed Grok Bot run comes whatever
+        // its age, for its bot's tree; the merge keeps it only under a listed bot or while it is recent itself.
+        let sessionStart = SessionWindow.start(at: now)
+        var listed = local.sessions.filter {
+            $0.lastSeen.map { $0 >= sessionStart } == true || GrokBotUsage.billedSubagentID($0.id) != nil
+        }
         var hookCompletions: [SessionCompletion] = [], hookNotice: String?
-        do { hookCompletions = try readCompletions(since) }
+        do { hookCompletions = try readCompletions(sessionStart) }
         catch { hookNotice = L10n.text("完成提醒记录读取失败", "Turn completion records could not be read") }
         // A stop hook finishes the running turns it follows when the client's own log records no end.
         let finished = Dictionary(hookCompletions.map { ($0.sessionID, RecordCoding.milliseconds($0.completedAt)) }, uniquingKeysWith: max)
-        for index in local.sessions.indices {
-            guard let stop = finished[local.sessions[index].id] else { continue }
-            local.sessions[index].turns = local.sessions[index].turns.map { SessionPhase.stopped($0, atMs: stop) }
+        for index in listed.indices {
+            guard let stop = finished[listed[index].id] else { continue }
+            listed[index].turns = listed[index].turns.map { SessionPhase.stopped($0, atMs: stop) }
         }
         let quota: ProviderQuota, quotaNotice: String?
         let observedAt = lastQuota?.at ?? now
@@ -160,19 +167,19 @@ actor AdditionalUsageProvider: UsageProvider, LedgerRecording {
             AgentDescriptor(id: "\(source.rawValue)-model:\($0)", vendor: source.vendor, model: ModelCatalog.consumerName(of: "\(source.rawValue)-model:\($0)"),
                             source: L10n.sourceAdditionalUsage, enabled: true)
         }
-        let sessions = local.sessions.compactMap { item -> LiveSession? in
-            guard let start = item.startedAt ?? item.events.map(\.timestamp).min(),
-                  let end = item.lastActivity ?? item.events.map(\.timestamp).max(), end >= since else { return nil }
+        let sessions = listed.compactMap { item -> LiveSession? in
+            guard let start = item.startedAt ?? item.events.map(\.timestamp).min(), let end = item.lastSeen else { return nil }
             let model = item.events.max { $0.timestamp < $1.timestamp }?.model ?? "Unknown"
             // The newest turn is the one observed last.
-            let turn = item.turns.max { $0.observedAtMs < $1.observedAtMs }
-            let isRunning = SessionPhase.read(.init(turn: turn), rule: .turns, at: now).inFlight
+            let evidence = SessionPhase.SourceEvidence(turn: item.turns.max { $0.observedAtMs < $1.observedAtMs })
+            let isRunning = SessionPhase.read(evidence, rule: .turns, at: now).inFlight
             return LiveSession(id: item.id, agentId: "\(source.rawValue)-model:\(model)", task: item.title,
                                terminal: item.workspace.map { URL(fileURLWithPath: $0).lastPathComponent },
                                startedAt: start, endedAt: isRunning ? nil : end, pctOfWindow: nil,
                                tokensIn: item.events.reduce(0) { $0 + $1.input }, tokensOut: item.events.reduce(0) { $0 + $1.output },
                                client: item.client, transcriptPath: item.path,
-                               cacheReadTokens: item.events.reduce(0) { $0 + $1.cacheRead }, accountWide: item.accountWide, observedAt: now,
+                               cacheReadTokens: item.events.reduce(0) { $0 + $1.cacheRead }, accountWide: item.accountWide,
+                               observedAt: evidence.newest,
                                workingDirectory: item.workspace, lastActivityAt: end, navigationTarget: item.navigationTarget)
         }
         let snapshots = windows.map {
@@ -209,7 +216,7 @@ actor AdditionalUsageProvider: UsageProvider, LedgerRecording {
             sourceNotices: displayNotice.isEmpty ? [:] : [source.vendor: displayNotice], quotaNotices: quotaNotice.map { [source.vendor: $0] } ?? [:],
             readingIssues: quotaNotice.map { [source.vendor: .readFailed($0)] } ?? [:],
             consumerIdsByQuota: Dictionary(uniqueKeysWithValues: quotaIDs.map { ($0, consumerIDs) }),
-            completions: local.sessions.flatMap(\.completions) + hookCompletions, turns: local.sessions.flatMap(\.turns),
+            completions: listed.flatMap(\.completions) + hookCompletions, turns: listed.flatMap(\.turns),
             accounts: accounts,
             forgottenAccountProviders: quota.forgetAccounts ? [source.vendor] : nil)
     }

@@ -14,9 +14,10 @@ struct DisplayPane: View {
         NSScreen.screens.first { ScreenIdentity.key(for: $0) == screen } ?? NSScreen.main
     }
 
+    /// The selected screen's placement as its HUD draws it now, an agent's unsaved style included.
     private var placement: ScreenPlacement {
         guard let selection else { return .default(hasNotch: false) }
-        return ScreenIdentity.placement(for: selection, in: settings.settings)
+        return ScreenIdentity.placement(for: selection, in: settings)
     }
 
     var body: some View {

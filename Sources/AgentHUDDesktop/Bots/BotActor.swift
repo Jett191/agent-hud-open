@@ -33,9 +33,11 @@ final class BotActor {
     var restsHidden = true
 
     /// - arrivesAfter: seconds a staying bot keeps its logo before it turns into the bot.
-    init(form: BotForm, staysBot: Bool, period: TimeInterval, arrivesAfter: TimeInterval = 0) {
+    /// - seed: the bot's random acts, fixed only to replay them in a test.
+    init(form: BotForm, staysBot: Bool, period: TimeInterval, arrivesAfter: TimeInterval = 0,
+         seed: UInt64 = UInt64.random(in: 0...UInt64.max)) {
         self.form = form
-        motion = BotMotion()
+        motion = BotMotion(seed: seed)
         motion.staysBot = staysBot
         motion.arrivesAfter = arrivesAfter
         motion.period = max(0.5, period)

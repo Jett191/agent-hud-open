@@ -280,13 +280,13 @@ final class DeepSeekQuestionsTests: XCTestCase, @unchecked Sendable {
               303 sh -c 'dsh --profile headless'
             """
         }
-        let ports = await DeepSeekQuestionObserver.discoverPorts(inspect: inspector)
+        let ports = await DeepSeekQuestionObserver.discoverPorts(isPresent: { true }, inspect: inspector)
         XCTAssertEqual(ports, [4599])
-        let withDefault = await DeepSeekQuestionObserver.discoverPorts(inspect: { _, _ in
+        let withDefault = await DeepSeekQuestionObserver.discoverPorts(isPresent: { true }, inspect: { _, _ in
             "  404 /usr/local/bin/dsh --profile web --no-open"
         })
         XCTAssertEqual(withDefault, [DeepSeekQuestionObserver.defaultPort])
-        let nothing = await DeepSeekQuestionObserver.discoverPorts(inspect: { _, _ in "" })
+        let nothing = await DeepSeekQuestionObserver.discoverPorts(isPresent: { true }, inspect: { _, _ in "" })
         XCTAssertTrue(nothing.isEmpty)
         XCTAssertTrue(DeepSeekQuestionObserver.isHarness(command))
         XCTAssertFalse(DeepSeekQuestionObserver.isHarness("sh -c 'dsh --profile headless'"))

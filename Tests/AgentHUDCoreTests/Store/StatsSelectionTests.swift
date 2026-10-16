@@ -66,6 +66,31 @@ final class StatsSelectionTests: XCTestCase {
         XCTAssertEqual(store.rows.first?.agent.billingPool, go.pool, "quota ownership stays with Go")
     }
 
+    func testAgentCardsPickTheirSessionsFromTheLastSevenDaysWhateverTheRange() throws {
+        let now = self.now
+        let store = UsageStore(provider: DemoUsageProvider(), settings: SettingsStore(
+            defaults: UserDefaults(suiteName: "AgentHUDTests.\(UUID().uuidString)")!, defaultAgents: []), clock: { now })
+        let model = "claude-model:claude-opus-5"
+        let consumer = AgentDescriptor(id: model, vendor: "Claude", model: "Opus 5", source: "fixture", enabled: true)
+        func session(_ id: String, daysAgo: Double, input: Int) -> (session: LiveSession, usage: SessionUsage) {
+            let at = now.addingTimeInterval(-daysAgo * 86400), tokens = SessionUsage.Tokens(tokensIn: input, tokensOut: 0)
+            return (LiveSession(id: id, agentId: model, task: id, terminal: nil, startedAt: at, endedAt: at, pctOfWindow: nil,
+                                tokensIn: input, tokensOut: 0, lastActivityAt: at),
+                    SessionUsage(models: [.init(agentId: model, tokens: tokens)], periods: [.init(start: at, agentId: model, tokens: tokens)],
+                                 calls: 1))
+        }
+        // A session from a month-long report the Sessions page no longer lists, with more tokens than the recent one.
+        let recent = session("recent", daysAgo: 2, input: 100), old = session("old", daysAgo: 20, input: 1_000)
+        store.replace(report: UsageReport(generatedAt: now, snapshots: [], sessions: [recent.session, old.session], consumers: [consumer],
+            usage: [recent.usage.periods[0].bucket, old.usage.periods[0].bucket],
+            sessionUsage: [recent.session.id: recent.usage, old.session.id: old.usage]))
+        store.setStatsRange(.days30)
+        XCTAssertEqual(store.statsSessions.map(\.id), ["recent"])
+        let card = try XCTUnwrap(store.agentUsage.first)
+        XCTAssertEqual(card.tokens.input, 1_100, "the card's tokens cover the whole range")
+        XCTAssertEqual(card.sessions.map(\.id), ["recent"], "its sessions come from the last seven days")
+    }
+
     func testConfiguredAPIClientsShowWithoutQuotaRowsOrTokenRecords() {
         let store = store()
         store.replace(report: UsageReport(generatedAt: now, snapshots: [], sessions: [], services: [

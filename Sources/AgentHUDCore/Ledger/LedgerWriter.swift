@@ -24,6 +24,26 @@ public struct LedgerWriter {
         try storage.connection.run("DELETE FROM source_file WHERE source = ? AND path = ?", [.text(source), .text(path)])
     }
 
+    /// Moves a file's stored state to the path `new`, replacing any state stored there.
+    public func renameFile(source: String, path old: String, to new: String) throws {
+        guard old != new else { return }
+        try removeFile(source: source, path: new)
+        try storage.connection.run("UPDATE source_file SET path = ? WHERE source = ? AND path = ?", [.text(new), .text(source), .text(old)])
+    }
+
+    /// Gives a contribution the key `new` with everything it holds: its usage, costs, marks and counting flag, which stay
+    /// in the buckets as they are. Whatever the ledger held under `new` goes first. Nothing happens when it holds nothing
+    /// under `old`.
+    public func rename(source: String, contribution old: String, to new: String) throws {
+        var found = false
+        try storage.connection.query("SELECT 1 FROM contribution WHERE source = ? AND key = ?", [.text(source), .text(old)]) { _ in found = true }
+        guard old != new, found else { return }
+        try remove(source: source, contribution: new)
+        try storage.connection.run("UPDATE contribution SET key = ? WHERE source = ? AND key = ?", [.text(new), .text(source), .text(old)])
+        storage.touch(old)
+        storage.touch(new)
+    }
+
     /// Moves a consumer's usage to the id `new`, adding it to usage already recorded there. Nothing happens when the
     /// ledger does not know `old`.
     public func moveConsumer(_ old: String, to new: String) throws {
@@ -96,7 +116,7 @@ public struct LedgerWriter {
             if since == nil || stored.account != (account ?? "") {
                 try remove(source: source, contribution: contribution)
             } else {
-                try removeEvents(of: try contributionID(source: source, key: contribution, account: account), since: floor)
+                try removeEvents(of: try contributionID(source: source, key: contribution, account: account), at: floor...Int64.max)
             }
         }
         if kept.isEmpty {
@@ -125,11 +145,7 @@ public struct LedgerWriter {
     }
 
     public func remove(source: String, contribution: String) throws {
-        var found: ContributionID?
-        try storage.connection.query("SELECT id, account, counted FROM contribution WHERE source = ? AND key = ?", [.text(source), .text(contribution)]) { row in
-            found = ContributionID(id: row.int(0), source: source, account: row.text(1) ?? "", counted: row.int(2) != 0)
-        }
-        guard let found else { return }
+        guard let found = try existingContribution(source: source, key: contribution) else { return }
         storage.touch(contribution)
         if found.counted { try applyTotals(of: found, sign: -1) }
         try storage.connection.run("DELETE FROM usage_event WHERE contribution_id = ?", [.integer(found.id)])
@@ -138,21 +154,31 @@ public struct LedgerWriter {
         try storage.connection.run("DELETE FROM contribution WHERE id = ?", [.integer(found.id)])
     }
 
-    /// Deletes a contribution's events from `since` on, with their share of the buckets.
-    private func removeEvents(of found: ContributionID, since: Int64) throws {
-        if found.counted { try applyTotals(of: found, sign: -1, since: since) }
-        try storage.connection.run("DELETE FROM usage_event WHERE contribution_id = ? AND timestamp_ms >= ?", [.integer(found.id), .integer(since)])
-        try storage.connection.run("DELETE FROM cost_amount WHERE contribution_id = ? AND timestamp_ms >= ?", [.integer(found.id), .integer(since)])
-        try storage.connection.run("DELETE FROM session_mark WHERE contribution_id = ? AND at_ms >= ?", [.integer(found.id), .integer(since)])
+    /// Deletes a contribution's events, costs and marks timed within `times`, in the ledger's milliseconds, with their
+    /// share of the buckets; the contribution and the rest of its usage stay.
+    func removeUsage(source: String, contribution: String, at times: ClosedRange<Int64>) throws {
+        guard let found = try existingContribution(source: source, key: contribution) else { return }
+        storage.touch(contribution)
+        try removeEvents(of: found, at: times)
     }
 
-    /// Adds (`sign` 1) or subtracts (-1) what a contribution holds from `since` on to the usage and cost buckets.
-    private func applyTotals(of found: ContributionID, sign: Int64, since: Int64 = .min) throws {
+    /// Deletes a contribution's events, costs and marks timed within `times`, with their share of the buckets.
+    private func removeEvents(of found: ContributionID, at times: ClosedRange<Int64>) throws {
+        if found.counted { try applyTotals(of: found, sign: -1, at: times) }
+        let bounds: [SQLiteConnection.Value] = [.integer(found.id), .integer(times.lowerBound), .integer(times.upperBound)]
+        try storage.connection.run("DELETE FROM usage_event WHERE contribution_id = ? AND timestamp_ms BETWEEN ? AND ?", bounds)
+        try storage.connection.run("DELETE FROM cost_amount WHERE contribution_id = ? AND timestamp_ms BETWEEN ? AND ?", bounds)
+        try storage.connection.run("DELETE FROM session_mark WHERE contribution_id = ? AND at_ms BETWEEN ? AND ?", bounds)
+    }
+
+    /// Adds (`sign` 1) or subtracts (-1) what a contribution holds within `times` to the usage and cost buckets.
+    private func applyTotals(of found: ContributionID, sign: Int64, at times: ClosedRange<Int64> = Int64.min...Int64.max) throws {
         var usage: [(start: Int64, agent: Int64, tokens: StoredTokens)] = []
         try storage.connection.query("""
             SELECT timestamp_ms / ? * ?, agent, SUM(tokens_in), SUM(tokens_out), SUM(cache_read), SUM(cache_write), SUM(reasoning)
-            FROM usage_event WHERE contribution_id = ? AND timestamp_ms >= ? GROUP BY 1, 2
-            """, [.integer(UsageLedger.bucketMilliseconds), .integer(UsageLedger.bucketMilliseconds), .integer(found.id), .integer(since)]) { row in
+            FROM usage_event WHERE contribution_id = ? AND timestamp_ms BETWEEN ? AND ? GROUP BY 1, 2
+            """, [.integer(UsageLedger.bucketMilliseconds), .integer(UsageLedger.bucketMilliseconds), .integer(found.id),
+                  .integer(times.lowerBound), .integer(times.upperBound)]) { row in
             usage.append((row.int(0), row.int(1), StoredTokens(tokensIn: row.int(2), tokensOut: row.int(3), cacheRead: row.int(4),
                                                              cacheWrite: row.int(5), reasoning: row.int(6))))
         }
@@ -162,8 +188,9 @@ public struct LedgerWriter {
         var costs: [(String, Int64, String, Int64, Int64)] = []
         try storage.connection.query("""
             SELECT billing, timestamp_ms / ? * ?, currency, SUM(amount_pico), COUNT(*) FROM cost_amount
-            WHERE contribution_id = ? AND timestamp_ms >= ? GROUP BY 1, 2, 3
-            """, [.integer(UsageLedger.bucketMilliseconds), .integer(UsageLedger.bucketMilliseconds), .integer(found.id), .integer(since)]) { row in
+            WHERE contribution_id = ? AND timestamp_ms BETWEEN ? AND ? GROUP BY 1, 2, 3
+            """, [.integer(UsageLedger.bucketMilliseconds), .integer(UsageLedger.bucketMilliseconds), .integer(found.id),
+                  .integer(times.lowerBound), .integer(times.upperBound)]) { row in
             costs.append((row.text(0) ?? "", row.int(1), row.text(2) ?? "", row.int(3), row.int(4)))
         }
         for (billing, start, currency, amount, events) in costs {
@@ -207,6 +234,15 @@ public struct LedgerWriter {
     private func hasCosts(_ contribution: ContributionID) throws -> Bool {
         var found = false
         try storage.connection.query("SELECT 1 FROM cost_amount WHERE contribution_id = ? LIMIT 1", [.integer(contribution.id)]) { _ in found = true }
+        return found
+    }
+
+    /// A contribution the ledger already holds, without adding one.
+    private func existingContribution(source: String, key: String) throws -> ContributionID? {
+        var found: ContributionID?
+        try storage.connection.query("SELECT id, account, counted FROM contribution WHERE source = ? AND key = ?", [.text(source), .text(key)]) { row in
+            found = ContributionID(id: row.int(0), source: source, account: row.text(1) ?? "", counted: row.int(2) != 0)
+        }
         return found
     }
 

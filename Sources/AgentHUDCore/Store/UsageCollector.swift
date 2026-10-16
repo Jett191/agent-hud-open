@@ -8,24 +8,28 @@ public struct UsageCollectionHooks {
     public var historyHours: @MainActor () -> Int
     /// Receives each report the provider returned, before it is displayed. The pass, and so the next pass, waits for it.
     public var publish: (@MainActor (UsageReport) async -> Void)?
-    /// Turns the provider's report into the displayed report, for example to add other data. The result must keep the
-    /// provider's discovered agents, accounts, active quota pools, completions and turns, which drive the agent list and
-    /// the island.
-    public var merge: (@MainActor (UsageReport) async -> UsageReport)?
+    /// Runs after each read, once the store shows its report, with the paths under the sources' directories that changed
+    /// since the read before: those the file watch reported, those the look at recent logs found grown, and reminded logs
+    /// (`UsageStore.remind(paths:)`). Nil when the collector cannot name them: the first read, file events the watch
+    /// dropped, sources that cannot be watched, the fallback read of every source, or a changed agent list. The pass, and
+    /// so the next pass, waits for it, so what a host reads here stays serial with collection. A host that needs a pass by
+    /// a time asks for one (`UsageStore.requestPass(for:at:)`).
+    public var afterPass: (@MainActor (Set<String>?) async -> Void)?
 
     public init(historyHours: @escaping @MainActor () -> Int = { UsageStore.historyHours },
                 publish: (@MainActor (UsageReport) async -> Void)? = nil,
-                merge: (@MainActor (UsageReport) async -> UsageReport)? = nil) {
+                afterPass: (@MainActor (Set<String>?) async -> Void)? = nil) {
         self.historyHours = historyHours
         self.publish = publish
-        self.merge = merge
+        self.afterPass = afterPass
     }
 }
 
-/// The collection pipeline. Every source only signals that it has new data: a file change under its directories, a finished
-/// account step, one of its checks falling due, or its poll interval when it cannot name its directories. The collector
-/// waits for those signals and reads the signalled sources, one read or account step at a time, handing each report to
-/// the store. A source's account steps run when its own work, or one of its windows, makes a new reading worth taking.
+/// The collection pipeline. Every source only signals that it has new data: a file change under its directories, a log a
+/// host was reminded of, a finished account step, one of its checks falling due, or its poll interval when it cannot name
+/// its directories. A host can also ask for a pass that reads a source by a time. The collector waits for those signals
+/// and reads the signalled sources, one read or account step at a time, handing each report to the store. A source's
+/// account steps run when its own work, or one of its windows, makes a new reading worth taking.
 @MainActor
 final class UsageCollector {
     weak var store: UsageStore?
@@ -50,6 +54,8 @@ final class UsageCollector {
     private var forcesAccounts = false
     /// The read of every local source that stands in for a file event the watch missed.
     private var fallbackReadAt: Date?
+    /// How long after one fallback read the next falls due.
+    var fallbackInterval = UsageRefresh.accountInterval
     private var sources: [UsageSource] = []
     private var fetchedAt: Date?
     private var fetchedAgents: [AgentDescriptor]?
@@ -67,14 +73,17 @@ final class UsageCollector {
     /// session went unseen until the fallback read. These few logs are therefore looked at on a schedule as well.
     private var logSignatures: [String: String] = [:]
     private var logsCheckedAt: Date?
+    /// Logs a host was reminded of, read at once and followed up for a moment after.
+    private var reminders = LogReminders()
+    /// Passes hosts asked for, by the paths whose sources they read.
+    private var requests = PassRequests()
+    /// What changed since the last read, for the `afterPass` hook.
+    private var changed = ChangedPaths()
     /// How recently a session must have been active for its log to be looked at, and how many logs are.
     static let logCheckRecency: TimeInterval = 24 * 3600
     static let logCheckLimit = 64
-    /// The provider's last report before the merge hook, numbered so a slower merge never replaces a newer one.
-    private var local: (report: UsageReport, generation: Int)?
-    private var generation = 0
-    private var isMerging = false
-    private var mergeRequested = false
+    /// The provider's last report: the logs looked at on a schedule and a single source's checks come from it.
+    private var local: UsageReport?
 
     init(provider: any UsageProvider, settings: SettingsStore, hooks: UsageCollectionHooks) {
         self.provider = provider
@@ -126,11 +135,39 @@ final class UsageCollector {
     }
 
     func refresh() async {
-        // An explicit refresh is also a request to reconcile files even if a directory event is still in flight.
-        await provider.fileChanges(nil)
+        // Without a working watch, an explicit refresh reconciles every file. With one, the pass takes the paths it
+        // reported, and an event still in flight wakes the loop when it arrives: opening the panel lists nothing again.
+        if changes?.isWatching != true {
+            await provider.fileChanges(nil)
+            changed.unnamed()
+        }
         needsFetch = true
         _ = await collect(force: true)
         wake?.yield()
+    }
+
+    /// Reads `paths` at once, as `UsageStore.remind(paths:)` says. The next pass hands them to the provider as the file
+    /// watch would and reads the sources that own them; a pass under way leaves them to the next one.
+    func remind(paths: Set<String>) {
+        guard !paths.isEmpty else { return }
+        // File events name real paths, and so do the logs the listings report; a client names its log as it opened it.
+        reminders.remind(Set(paths.map { path in
+            guard let real = realpath(path, nil) else { return path }
+            defer { free(real) }
+            return String(cString: real)
+        }))
+        wake?.yield()
+    }
+
+    /// Reads the sources that own `paths` at the first pass at or after `date`, the next pass when nil, as
+    /// `UsageStore.requestPass(for:at:)` says.
+    func requestPass(for paths: Set<String>, at date: Date?) {
+        guard !paths.isEmpty else { return }
+        let date = date ?? Date()
+        // Only a request due before every other one changes when the loop must wake.
+        let sooner = requests.next.map { date < $0 } ?? true
+        requests.request(paths, at: date)
+        if sooner { wake?.yield() }
     }
 
     /// Reads every source's accounts in the next pass, whatever its work is doing; the request spacing still holds.
@@ -139,7 +176,8 @@ final class UsageCollector {
         await refresh()
     }
 
-    /// A report installed directly is not the provider's; merging must not replace it.
+    /// A report installed directly is not the provider's: the logs and checks the collector follows wait for the
+    /// provider's next report.
     func forgetLocalReport() {
         local = nil
     }
@@ -154,27 +192,12 @@ final class UsageCollector {
         wake?.yield()
     }
 
-    /// While nothing is signalled and file changes are watched, no change was missed: the data on screen is current.
+    /// While nothing is signalled or reminded of and file changes are watched, no change was missed: the data on screen is
+    /// current.
     func confirmQuiet(at date: Date) {
-        guard let store, !isCollecting, !needsFetch, signalled.isEmpty, retryAt == nil, changes?.isWatching != false,
+        guard let store, !isCollecting, !needsFetch, signalled.isEmpty, !reminders.isPending, retryAt == nil, changes?.isWatching != false,
               sources.allSatisfy({ $0.directories != nil }), date.timeIntervalSince(store.dataDate) >= 60 else { return }
         store.checkedAt = date
-    }
-
-    /// Merges the last provider report again without collecting. A local read in progress merges for it, or merges again
-    /// once it returns when its own merge had already started.
-    func remerge() async {
-        guard hooks.merge != nil else { return }
-        mergeRequested = true
-        guard let store, !isMerging, !store.isRefreshing else { return }
-        isMerging = true
-        defer { isMerging = false }
-        while mergeRequested, !store.isRefreshing, let merge = hooks.merge, let local {
-            mergeRequested = false
-            let merged = await merge(local.report)
-            guard local.generation == self.local?.generation, store.isAccessAllowed else { continue }
-            store.merged(merged)
-        }
     }
 
     /// One pass: collects the signals, reads the signalled sources, then runs account steps within their budget.
@@ -188,11 +211,12 @@ final class UsageCollector {
         isCollecting = true
         defer { isCollecting = false }
         let started = Date()
-        if fallbackReadAt.map({ started.timeIntervalSince($0) >= UsageRefresh.accountInterval }) ?? true {
+        if fallbackReadAt.map({ started.timeIntervalSince($0) >= fallbackInterval }) ?? true {
             fallbackReadAt = started
             // The fallback read catches a change the watch missed and picks up directories created since the last one.
             changes?.update()
             needsFetch = true
+            changed.unnamed()
         }
         let consent = settings.settings.readCopilotQuota
         if accountSteps.isEmpty {
@@ -209,14 +233,17 @@ final class UsageCollector {
                 return spaced <= started && (looked || due[source.name].map { $0 <= started } ?? false)
             }.flatMap { source in source.accountSteps.map { (source.name, $0) } }
         }
-        await gatherSignals(at: started)
-        if changes?.isWatching == false { await provider.fileChanges(nil) }
-        let spacing = force ? 0 : fetchedAt.map { UsageRefresh.readSpacing - started.timeIntervalSince($0) } ?? 0
+        let reminded = await gatherSignals(at: started)
+        if changes?.isWatching == false {
+            await provider.fileChanges(nil)
+            changed.unnamed()
+        }
+        // A log a hook reminded of is read without waiting for the spacing.
+        let spacing = force || reminded ? 0 : fetchedAt.map { UsageRefresh.readSpacing - started.timeIntervalSince($0) } ?? 0
         if needsFetch || !signalled.isEmpty {
             if spacing <= 0 {
                 let names: Set<String>? = needsFetch || signalled.contains("") ? nil : signalled
                 await fetch(at: started, sources: names, into: store)
-                if mergeRequested { await remerge() }
             }
         } else if started.timeIntervalSince(store.dataDate) >= 60, changes?.isWatching != false {
             store.checkedAt = started
@@ -234,9 +261,13 @@ final class UsageCollector {
         return await pause(after: Date())
     }
 
-    /// Turns what happened since the last pass into signalled sources.
-    private func gatherSignals(at date: Date) async {
-        if fetchedAgents != settings.agents { needsFetch = true }
+    /// Turns what happened since the last pass, and the passes hosts asked for by now, into signalled sources. Returns
+    /// whether a reminded log is due, which the pass reads without waiting for the read spacing.
+    private func gatherSignals(at date: Date) async -> Bool {
+        if fetchedAgents != settings.agents {
+            needsFetch = true
+            changed.unnamed()
+        }
         if let retryAt, retryAt <= date { needsFetch = true; self.retryAt = nil }
         if store?.isIndexing == true, fetchedAt.map({ date.timeIntervalSince($0) >= UsageRefresh.indexingInterval }) ?? true {
             needsFetch = true
@@ -246,11 +277,25 @@ final class UsageCollector {
                 if !paths.isEmpty {
                     await provider.fileChanges(paths)
                     signalled.formUnion(owners(of: paths))
+                    changed.add(paths)
                 }
             } else {
                 await provider.fileChanges(nil)
                 needsFetch = true
+                changed.unnamed()
             }
+        }
+        let reminded = reminders.due(at: date)
+        if !reminded.isEmpty {
+            await provider.fileChanges(reminded)
+            signalled.formUnion(owners(of: reminded))
+            changed.add(reminded)
+        }
+        let requested = requests.take(at: date)
+        if !requested.isEmpty {
+            // A path no watched source owns still gets its pass, which reads every source.
+            let owners = owners(of: requested)
+            if owners.isEmpty { needsFetch = true } else { signalled.formUnion(owners) }
         }
         if changes?.isWatching == true, logsCheckedAt.map({ date.timeIntervalSince($0) >= UsageRefresh.pollInterval }) ?? true {
             logsCheckedAt = date
@@ -258,6 +303,7 @@ final class UsageCollector {
             if !grown.isEmpty {
                 await provider.fileChanges(grown)
                 signalled.formUnion(owners(of: grown))
+                changed.add(grown)
             }
         }
         for source in polledSources where readAt[source].map({ date.timeIntervalSince($0) >= UsageRefresh.pollInterval }) ?? true {
@@ -267,12 +313,13 @@ final class UsageCollector {
             let since = readAt[source] ?? .distantPast
             if times.contains(where: { $0 > since && $0 <= date }) { signalled.insert(source) }
         }
+        return !reminded.isEmpty
     }
 
     /// The logs of the sessions most recently active, newest first: where a new turn is most likely to be written.
     private func recentLogs(at date: Date) -> [String] {
         let cutoff = date.addingTimeInterval(-Self.logCheckRecency)
-        let recent = (local?.report.sessions ?? []).compactMap { session -> (path: String, at: Date)? in
+        let recent = (local?.sessions ?? []).compactMap { session -> (path: String, at: Date)? in
             guard let path = session.transcriptPath else { return nil }
             let at = session.lastActivityAt ?? session.endedAt ?? session.startedAt
             return at >= cutoff ? (path, at) : nil
@@ -285,10 +332,7 @@ final class UsageCollector {
     static func changedLogs(_ paths: [String], known: inout [String: String]) -> Set<String> {
         var changed: Set<String> = [], next: [String: String] = [:]
         for path in paths {
-            // A new URL does not answer from values cached by an earlier look.
-            guard let values = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
-                  let modified = values.contentModificationDate, let size = values.fileSize else { continue }
-            let signature = "\(modified.timeIntervalSince1970):\(size)"
+            guard let signature = LogSignature.of(path) else { continue }
             if let before = known[path], before != signature { changed.insert(path) }
             next[path] = signature
         }
@@ -338,17 +382,21 @@ final class UsageCollector {
     /// Each source's check times; a provider that does not split itself is checked from the report it returned.
     private func checks() async -> [String: [Date]] {
         let checks = await provider.sourceChecks()
-        guard checks.isEmpty, sources.count == 1, let report = local?.report else { return checks }
+        guard checks.isEmpty, sources.count == 1, let report = local else { return checks }
         return [sources[0].name: report.activityChecks]
     }
 
     /// The time until the next signal known in advance: an account step, a source's next account reading, the fallback
-    /// read, a pending read held back by the read spacing, indexing, a poll interval, a check or a retry.
+    /// read, a pending read held back by the read spacing, indexing, a poll interval, a check, a reminded log's follow-up
+    /// look, a pass a host asked for or a retry.
     private func pause(after now: Date) async -> TimeInterval {
         var times: [Date] = []
         if !accountSteps.isEmpty { times.append(now.addingTimeInterval(UsageRefresh.accountStepBudget)) }
         else { times += await accountDue(at: now).values }
-        if let fallbackReadAt { times.append(fallbackReadAt.addingTimeInterval(UsageRefresh.accountInterval)) }
+        if reminders.isPending { times.append(now) }
+        if let look = reminders.nextLook { times.append(look) }
+        if let request = requests.next { times.append(request) }
+        if let fallbackReadAt { times.append(fallbackReadAt.addingTimeInterval(fallbackInterval)) }
         if needsFetch || !signalled.isEmpty { times.append((fetchedAt ?? now).addingTimeInterval(UsageRefresh.readSpacing)) }
         if store?.isIndexing == true { times.append((fetchedAt ?? now).addingTimeInterval(UsageRefresh.indexingInterval)) }
         if let retryAt { times.append(retryAt) }
@@ -361,33 +409,38 @@ final class UsageCollector {
         return max(0, next.timeIntervalSince(now))
     }
 
-    /// The publish and merge hooks run here, before the pass can end.
+    /// The publish and after-pass hooks run here, before the pass can end.
     private func fetch(at date: Date, sources names: Set<String>?, into store: UsageStore) async {
         needsFetch = false
         store.isRefreshing = true
         defer { store.isRefreshing = false }
+        // What this read covers; a read that does not finish leaves it to the next.
+        let covered = changed.take()
         do {
             let agents = settings.agents
-            let fetched = try await provider.fetchUsage(agents: agents, historyHours: hooks.historyHours(), sources: names)
+            let report = try await provider.fetchUsage(agents: agents, historyHours: hooks.historyHours(), sources: names)
             let read = names ?? Set(sources.map(\.name))
             signalled.subtract(read)
             for name in read { readAt[name] = date }
-            await hooks.publish?(fetched)
-            mergeRequested = false
-            let report = await hooks.merge?(fetched) ?? fetched
-            guard store.isAccessAllowed, !Task.isCancelled else { needsFetch = true; return }
+            await hooks.publish?(report)
+            guard store.isAccessAllowed, !Task.isCancelled else {
+                needsFetch = true
+                changed.putBack(covered)
+                return
+            }
             let agentsUnchanged = settings.agents == agents
             settings.mergeDiscovered(from: report)
             // This pass consumed its captured input and its own discoveries, but not an edit made while it awaited.
             fetchedAgents = agentsUnchanged ? settings.agents : agents
-            generation += 1
-            local = (fetched, generation)
+            local = report
             store.collected(report)
             fetchedAt = date
+            await hooks.afterPass?(covered)
         } catch {
             // Every source failed; the retry reads them all again instead of spinning on the same signals.
             signalled = []
             retryAt = date.addingTimeInterval(UsageRefresh.pollInterval)
+            changed.putBack(covered)
             guard store.isAccessAllowed, !Task.isCancelled else { return }
             fetchedAt = date
             store.lastError = error.localizedDescription

@@ -31,15 +31,15 @@ enum AgentArtwork {
     )
 
     /// The bundled artwork at its own resolution, for surfaces that draw the mark larger than the 16 pt
-    /// menu icon — the logo queue scales it up rather than blowing up the icon-sized copy.
-    @MainActor private static var originals: [String: NSImage] = [:]
-
+    /// menu icon — the logo queue scales it up rather than blowing up the icon-sized copy. It is read from its
+    /// file at each call and kept by no one: every caller keeps only what it makes from it at its own size, and
+    /// once drawn the artwork holds its pixels, OpenAI's tinted copy 12.5 MB of them.
+    ///
     /// - light: which background the mark will sit on. OpenCode ships a light and a dark variant; everything
     ///   else is the same artwork either way.
     @MainActor
     static func original(for vendor: String, light: Bool = false) -> NSImage? {
         let vendor = canonical(vendor, light: light)
-        if let hit = originals[vendor] { return hit }
         guard let name = fileNames[vendor],
               let url = AppResources.bundle.url(forResource: name, withExtension: "png"),
               let artwork = NSImage(contentsOf: url)
@@ -48,7 +48,6 @@ enum AgentArtwork {
         // for it is the same green the menu uses.
         let image = vendor == "ChatGPT" ? tinted(artwork, with: openAIGreen) : artwork
         image.isTemplate = monochromeVendors.contains(vendor)
-        originals[vendor] = image
         return image
     }
 
@@ -79,21 +78,19 @@ enum AgentArtwork {
         fileNames.keys.filter { !$0.hasSuffix("-dark") }.sorted()
     }
 
-    /// The mark a vendor is drawn with, as a key: vendors that share one piece of artwork share this one.
-    /// The logo queue collapses on it rather than on the vendor name, because two identical marks in a row
-    /// are two the eye cannot tell apart, and telling agents apart at a glance is what the queue is for.
-    static func markKey(_ vendor: String) -> String { canonical(vendor) }
+    /// The mark a vendor is drawn with, as a key: vendors that share one piece of artwork share this one
+    /// (`VendorMark.key`). The logo queue collapses on it rather than on the vendor name, because two identical marks
+    /// in a row are two the eye cannot tell apart, and telling agents apart at a glance is what the queue is for.
+    static func markKey(_ vendor: String) -> String { VendorMark.key(vendor) }
 
-    /// Codex and ChatGPT share the bundled OpenAI artwork, while keeping distinct names, and so do the three Qoder
-    /// builds. OpenCode and Qoder ship one file per background, because part of each mark is the background's own
-    /// colour and would disappear on the other one.
+    /// The bundled file a vendor's mark is drawn from. Codex and ChatGPT share the bundled OpenAI artwork, while
+    /// keeping distinct names, and so do the three Qoder builds (`VendorMark`). OpenCode and Qoder ship one file per
+    /// background, because part of each mark is the background's own colour and would disappear on the other one.
     private static func canonical(_ vendor: String, light: Bool = false) -> String {
-        switch vendor {
-        case "Codex": return "ChatGPT"
-        case "Grok CLI": return "Grok"
-        case "OpenCode", "OpenCode Go": return light ? "OpenCode" : "OpenCode-dark"
-        case "Qoder", "Qoder CN", "QoderWork": return light ? "Qoder" : "Qoder-dark"
-        default: return vendor
+        let mark = VendorMark.key(vendor)
+        switch mark {
+        case "OpenCode", "Qoder": return light ? mark : mark + "-dark"
+        default: return mark
         }
     }
 

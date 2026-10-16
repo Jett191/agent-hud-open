@@ -59,6 +59,23 @@ public final class InstanceLock: Sendable {
         return .acquired(InstanceLock(descriptor: descriptor))
     }
 
+    /// The application that holds the lock at `url` now, named as a refused claim names it; nil when no copy holds it
+    /// or the holder has not written its name yet. It only asks: the lock is never taken, not even for a moment, so a
+    /// copy that starts meanwhile is not turned away. A process that must not start the application, such as `--mcp`,
+    /// learns from it whether one runs.
+    static func runningApplication(at url: URL = sharedURL) -> URL? {
+        let descriptor = open(url.path, O_RDONLY | O_CLOEXEC)
+        guard descriptor >= 0 else { return nil }
+        defer { close(descriptor) }
+        // flock(2) and fcntl(2) keep one table of locks on macOS, so F_GETLK sees the holder's whole-file lock, from
+        // another process or this one, and reports it without taking any.
+        var probe = flock()
+        probe.l_type = Int16(F_WRLCK)
+        probe.l_whence = Int16(SEEK_SET)
+        guard fcntl(descriptor, F_GETLK, &probe) == 0, probe.l_type != Int16(F_UNLCK) else { return nil }
+        return holder(at: url)
+    }
+
     /// The application whose executable the holder wrote: `…/Name.app` for one that runs in a bundle. Nil while the
     /// holder has not written it yet.
     static func holder(at url: URL) -> URL? {

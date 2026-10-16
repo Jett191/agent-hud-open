@@ -1,7 +1,8 @@
 import AgentHUDSupport
 import Foundation
 
-/// Native app approvals and mid-turn questions belong to Desktop's original owner, independently of CLI hooks.
+/// Native app and browser approvals and mid-turn questions belong to Desktop's original owner, independently of CLI
+/// hooks. What is waiting is read from the threads a `CodexDesktopStream` follows, and an answer goes to the owner.
 public struct CodexDesktopPermissions: Sendable {
     public struct Pending: Sendable {
         public let request: PermissionRequest
@@ -14,12 +15,15 @@ public struct CodexDesktopPermissions: Sendable {
 
     public struct Snapshot: Sendable {
         public let pending: [Pending]
-        /// Only successfully read owners can establish that a previously visible request has disappeared.
+        /// Only threads whose state is known can establish that a previously visible request has disappeared.
         public let observedThreadIDs: Set<String>
-        /// How long each thread's read took, whether or not it succeeded. Desktop builds the thread's whole state for
-        /// every read, so a slow read is one to repeat less often.
-        public var readSeconds: [String: TimeInterval] = [:]
+        /// Threads whose owner says their turn waits on the user, for an approval or an answer, whether or not the HUD
+        /// shows a card for what it asked.
+        public var waitingThreadIDs: Set<String> = []
     }
+
+    /// The flags Desktop sets on an active thread while it waits on the user.
+    static let waitingFlags: Set<String> = ["waitingOnApproval", "waitingOnUserInput"]
 
     public enum Failure: Error, Equatable, Sendable {
         case noLongerWaiting, unsupportedDecision
@@ -27,61 +31,65 @@ public struct CodexDesktopPermissions: Sendable {
 
     private let dataDirectory: URL
     private let timeout: TimeInterval
+    /// The followed threads, kept current by their owners' changes.
+    public let stream: CodexDesktopStream
     var clock: @Sendable () -> Date = { Date() }
 
-    public init(dataDirectory: URL = CodexLocator.dataDirectory, timeout: TimeInterval = 3) {
+    /// - stream: the followed threads to read; by default a stream of this reader's own on `dataDirectory`.
+    public init(dataDirectory: URL = CodexLocator.dataDirectory, timeout: TimeInterval = 3, stream: CodexDesktopStream? = nil) {
         self.dataDirectory = dataDirectory
         self.timeout = timeout
+        self.stream = stream ?? CodexDesktopStream(dataDirectory: dataDirectory)
     }
 
-    public func fetch(threadIDs: Set<String>) async throws -> Snapshot {
-        guard timeout.isFinite, timeout > 0, !threadIDs.contains(where: { $0.isEmpty }) else {
-            throw CodexDesktopIPC.Failure.invalidInput
+    /// What the followed threads are waiting on at this moment. A thread whose state is not known, or cannot be read
+    /// as this reader expects it, is left out of the observed ones rather than read as waiting on nothing.
+    public func snapshot() -> Snapshot {
+        var found: [Pending] = [], observed = Set<String>(), waiting = Set<String>()
+        for (threadID, thread) in stream.threads {
+            let status = thread.state["threadRuntimeStatus"]
+            if status["type"].stringValue == "active",
+               (status["activeFlags"].arrayValue ?? []).contains(where: { Self.waitingFlags.contains($0.stringValue ?? "") }) {
+                waiting.insert(threadID)
+            }
+            guard let requests = try? Self.pending(thread.state, threadID: threadID, ownerClientID: thread.ownerClientID,
+                                                   now: clock()) else { continue }
+            found += requests
+            observed.insert(threadID)
         }
-        try Task.checkCancellation()
-        return try await withThrowingTaskGroup(of: Snapshot.self) { group in
-            var remaining = threadIDs.sorted().makeIterator()
-            func enqueue(_ threadID: String) {
-                group.addTask { [self] in try await detached { [self] in try read(threadID: threadID) } }
-            }
-            // Bound socket work while allowing an unavailable owner to time out independently of the others.
-            for _ in 0..<min(4, threadIDs.count) {
-                if let threadID = remaining.next() { enqueue(threadID) }
-            }
-            var found: [Pending] = [], observed = Set<String>(), seconds: [String: TimeInterval] = [:]
-            while let result = try await group.next() {
-                found += result.pending
-                observed.formUnion(result.observedThreadIDs)
-                seconds.merge(result.readSeconds) { max($0, $1) }
-                if let threadID = remaining.next() { enqueue(threadID) }
-            }
-            return Snapshot(pending: found.sorted { $0.id < $1.id }, observedThreadIDs: observed, readSeconds: seconds)
-        }
+        return Snapshot(pending: found.sorted { $0.id < $1.id }, observedThreadIDs: observed, waitingThreadIDs: waiting)
     }
 
-    /// Re-read the exact owner and request before sending only the option the user selected.
+    /// Confirms the exact owner and request in the thread as it now stands before sending only the option the user selected.
     public func resolve(_ decision: PermissionDecision, for pending: Pending) async throws {
         guard let response = try Self.response(decision, for: pending) else { return }
         guard timeout.isFinite, timeout > 0 else { throw CodexDesktopIPC.Failure.invalidInput }
+        try Task.checkCancellation()
         try await detached { [self] in
             try Task.checkCancellation()
+            // The stream's copy is the owner's own account of the thread, as of its last change.
+            guard let thread = stream.thread(pending.threadID), thread.ownerClientID == pending.ownerClientID else {
+                throw Failure.noLongerWaiting
+            }
+            let state = thread.state
+            let current = try Self.pending(state, threadID: pending.threadID, ownerClientID: thread.ownerClientID, now: clock())
+            guard current.contains(where: { $0.id == pending.id && $0.wireRequest == pending.wireRequest }) else {
+                throw Failure.noLongerWaiting
+            }
             let connection = try CodexDesktopIPC(path: socketPath, timeout: timeout)
             defer { connection.close() }
             let clientID = try Self.initialize(connection)
+            // A thread can pass to another client between two of its changes: the answer goes to who owns it now, and
+            // only when that is still who asked.
             let owner: String
             do { owner = try Self.owner(connection, source: clientID, threadID: pending.threadID) }
             catch CodexDesktopIPC.Failure.rejected("no-client-found") { throw Failure.noLongerWaiting }
             guard owner == pending.ownerClientID else { throw Failure.noLongerWaiting }
-            let state = try connection.conversationState(source: clientID, owner: owner, threadID: pending.threadID)
-            let current = try Self.pending(state, threadID: pending.threadID, ownerClientID: owner, now: clock())
-            guard current.contains(where: { $0.id == pending.id && $0.wireRequest == pending.wireRequest }) else {
-                throw Failure.noLongerWaiting
-            }
             try Task.checkCancellation()
             let method: String
             let params: [String: Any]
             switch pending.request.nativeApproval {
-            case .computerUseApp:
+            case .computerUseApp, .browserAccess:
                 method = Self.answerMethod
                 params = ["conversationId": pending.threadID,
                           "requestId": try Self.foundation(pending.requestID),
@@ -124,7 +132,7 @@ public struct CodexDesktopPermissions: Sendable {
                 throw CodexDesktopIPC.Failure.acceptanceUncertain
             }
             switch pending.request.nativeApproval {
-            case .computerUseApp:
+            case .computerUseApp, .browserAccess:
                 guard receipt["result"]["result"]["ok"] == .bool(true) else {
                     throw CodexDesktopIPC.Failure.acceptanceUncertain
                 }
@@ -140,26 +148,6 @@ public struct CodexDesktopPermissions: Sendable {
     private static let answerMethod = "thread-follower-submit-mcp-server-elicitation-response"
     private static let questionAnswerMethod = "thread-follower-steer-turn"
     private var socketPath: String { dataDirectory.appendingPathComponent("ipc/ipc.sock").path }
-
-    private func read(threadID: String) throws -> Snapshot {
-        try Task.checkCancellation()
-        // A missing socket is a service failure. A missing or unreadable owner is unknown for that thread alone.
-        let started = ProcessInfo.processInfo.systemUptime
-        let connection = try CodexDesktopIPC(path: socketPath, timeout: timeout)
-        defer { connection.close() }
-        var seconds: [String: TimeInterval] { [threadID: ProcessInfo.processInfo.systemUptime - started] }
-        do {
-            let clientID = try Self.initialize(connection)
-            let owner = try Self.owner(connection, source: clientID, threadID: threadID)
-            let state = try connection.conversationState(source: clientID, owner: owner, threadID: threadID)
-            let requests = try Self.pending(state, threadID: threadID, ownerClientID: owner, now: clock())
-            try Task.checkCancellation()
-            return Snapshot(pending: requests, observedThreadIDs: [threadID], readSeconds: seconds)
-        } catch {
-            try Task.checkCancellation()
-            return Snapshot(pending: [], observedThreadIDs: [], readSeconds: seconds)
-        }
-    }
 
     private static func initialize(_ connection: CodexDesktopIPC) throws -> String {
         let initialized = try connection.request(method: "initialize", version: 0,
@@ -184,39 +172,97 @@ public struct CodexDesktopPermissions: Sendable {
             let params = wire["params"], metadata = params["_meta"]
             guard wire["method"].stringValue == "mcpServer/elicitation/request", wire["completed"].boolValue != true,
                   params["threadId"].stringValue == threadID, params["mode"].stringValue == "form",
-                  metadata["codex_approval_kind"].stringValue == "mcp_tool_call",
-                  metadata["connector_id"].stringValue == "computer-use",
-                  let app = metadata["tool_params"]["app"].stringValue,
-                  !app.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                  metadata["codex_approval_kind"].stringValue == "mcp_tool_call" else { return nil }
             let requestID = wire["id"]
             switch requestID {
             case .string(let value) where !value.isEmpty: break
             case .integer: break
             default: return nil
             }
-            guard let modes = metadata["persist"].arrayValue,
-                  modes.allSatisfy({ $0.stringValue == "session" || $0.stringValue == "always" }),
-                  modes.contains(.string("session")) else { return nil }
-            let persist = modes.compactMap(\.stringValue)
-            let displayName = metadata["tool_params_display"].arrayValue?.first(where: { $0["name"].stringValue == "app" })?["value"]
-                .stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let name = displayName.flatMap { $0.isEmpty ? nil : $0 } ?? app
+            let approval: Approval?
+            switch metadata["connector_id"].stringValue {
+            case "computer-use": approval = app(metadata)
+            case "browser-use": approval = try browser(params, in: state)
+            default: approval = nil
+            }
+            guard let approval else { return nil }
             let encodedID = String(decoding: try RecordCoding.encoder().encode(requestID), as: UTF8.self)
             let encodedWire = String(decoding: try RecordCoding.encoder().encode(wire), as: UTF8.self)
             let subtitle = metadata["subtitle"].stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
             let risk = metadata["riskLevel"].stringValue == "high" ? L10n.text("较高风险", "Elevated Risk") : nil
-            let detail = [risk, subtitle.flatMap { $0.isEmpty ? nil : $0 }, app].compactMap { $0 }.joined(separator: "\n\n")
+            let detail = [risk, subtitle.flatMap { $0.isEmpty ? nil : $0 }, approval.subject].compactMap { $0 }.joined(separator: "\n\n")
             let request = PermissionRequest(
                 id: "codex-desktop-permission:\(RecordCoding.hash([threadID, ownerClientID, encodedID, encodedWire]))", source: .codex,
-                vendor: "Codex", sessionID: threadID, toolName: "computer_use_app",
-                summary: L10n.text("允许 ChatGPT 使用 \(name)？", "Allow ChatGPT to use \(name)?"),
-                detail: detail, cwd: state["cwd"].stringValue,
-                nativeApproval: .computerUseApp(persist: persist), at: now)
+                vendor: "Codex", sessionID: threadID, toolName: approval.toolName, summary: approval.summary,
+                detail: detail, cwd: state["cwd"].stringValue, nativeApproval: approval.native, at: now)
             return Pending(request: request, threadID: threadID, ownerClientID: ownerClientID,
                            wireRequest: wire, requestID: requestID)
         }
         return try approvals + CodexDesktopQuestions.pending(state, threadID: threadID,
                                                             ownerClientID: ownerClientID, now: now)
+    }
+
+    /// What a tool-call approval asks, in the card's terms: its one line, what it is about, and the scopes it offers.
+    private struct Approval {
+        let toolName: String
+        let summary: String
+        let subject: String?
+        let native: PermissionRequest.NativeApproval
+    }
+
+    /// Computer Use asking to use an app, for this conversation and, when Desktop offers it, always.
+    private static func app(_ metadata: JSONValue) -> Approval? {
+        guard let app = metadata["tool_params"]["app"].stringValue,
+              !app.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let persist = scopes(metadata["persist"]), persist.contains("session") else { return nil }
+        let displayName = metadata["tool_params_display"].arrayValue?.first(where: { $0["name"].stringValue == "app" })?["value"]
+            .stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = displayName.flatMap { $0.isEmpty ? nil : $0 } ?? app
+        return Approval(toolName: "computer_use_app", summary: L10n.text("允许 ChatGPT 使用 \(name)？", "Allow ChatGPT to use \(name)?"),
+                        subject: app, native: .computerUseApp(persist: persist))
+    }
+
+    /// The browser asking for a website: to open it, to move files to or from it, to read its history or to drive it
+    /// more deeply. Desktop answers these itself where nobody is asked: under automatic review, and for a site's pages
+    /// in a turn that runs with full access and never asks. Only a turn the user reviews shows a card, as with the hook.
+    private static func browser(_ params: JSONValue, in state: JSONValue) throws -> Approval? {
+        let metadata = params["_meta"]
+        guard let persist = scopes(metadata["persist"]) else { return nil }
+        let turn = try params["turnId"].stringValue.flatMap { try CodexDesktopQuestions.turn($0, in: state) }
+        let settings = turn?["params"] ?? state["currentPermissions"]
+        guard settings["approvalsReviewer"].stringValue == "user" else { return nil }
+        let tool = metadata["tool_name"].stringValue ?? ""
+        let opensSite = tool == "access_browser_origin" || tool == "access_browser_origin_with_raw_cdp"
+        if opensSite, settings["approvalPolicy"].stringValue == "never",
+           settings["sandboxPolicy"]["type"].stringValue == "dangerFullAccess" { return nil }
+        let origin = (metadata["origin"].stringValue ?? metadata["tool_params"]["origin"].stringValue)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = metadata["connector_name"].stringValue.flatMap { $0.isEmpty ? nil : $0 } ?? "ChatGPT"
+        let summary: String
+        if tool == "access_browser_origin", let origin, !origin.isEmpty {
+            summary = L10n.text("允许 \(name) 访问 \(origin)？", "Allow \(name) to access \(origin)?")
+        } else if let message = params["message"].stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty {
+            // Desktop's own sentence for the rarer requests, as its card reads.
+            summary = message
+        } else {
+            return nil
+        }
+        return Approval(toolName: tool.isEmpty ? "browser" : tool, summary: summary, subject: origin.flatMap { $0.isEmpty ? nil : $0 },
+                        native: .browserAccess(origin: origin.flatMap { $0.isEmpty ? nil : $0 }, persist: persist))
+    }
+
+    /// The scopes a request offers to keep its answer for, as Desktop writes them: none, one, or a list. Nil for a
+    /// scope this reader does not know, whose request is then left to Desktop.
+    private static func scopes(_ value: JSONValue) -> [String]? {
+        let names: [String?]
+        switch value {
+        case .null: names = []
+        case .string(let name): names = [name]
+        case .array(let values): names = values.map(\.stringValue)
+        default: return nil
+        }
+        guard names.allSatisfy({ $0 == "session" || $0 == "always" }) else { return nil }
+        return names.compactMap { $0 }
     }
 
     static func response(_ decision: PermissionDecision, for pending: Pending) throws -> JSONValue? {
@@ -239,13 +285,23 @@ public struct CodexDesktopPermissions: Sendable {
             case .allow, .allowAlways, .deny: throw Failure.unsupportedDecision
             }
         }
-        guard case .computerUseApp(let persist) = pending.request.nativeApproval else { throw Failure.unsupportedDecision }
+        let persist: [String]
+        switch pending.request.nativeApproval {
+        case .computerUseApp(let scopes): persist = scopes
+        case .browserAccess(_, let scopes): persist = scopes
+        default: throw Failure.unsupportedDecision
+        }
         switch decision {
         case .leave: return nil
         case .allow:
-            guard persist.contains("session") else { throw Failure.unsupportedDecision }
-            return .object(["action": .string("accept"), "content": .object([:]),
-                            "_meta": .object(["persist": .string("session")])])
+            // An app is allowed for the conversation. A website asked for with no scope is allowed as Desktop's own
+            // "Allow once" allows it: accepted, and kept for as long as the browser's settings say.
+            if persist.contains("session") {
+                return .object(["action": .string("accept"), "content": .object([:]),
+                                "_meta": .object(["persist": .string("session")])])
+            }
+            guard case .browserAccess = pending.request.nativeApproval else { throw Failure.unsupportedDecision }
+            return .object(["action": .string("accept"), "content": .object([:]), "_meta": .null])
         case .allowAlways(let update):
             guard persist.contains("always"), update == .object(["persist": .string("always")]) else {
                 throw Failure.unsupportedDecision

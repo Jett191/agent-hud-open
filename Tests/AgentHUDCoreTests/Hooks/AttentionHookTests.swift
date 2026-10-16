@@ -86,6 +86,10 @@ final class AttentionHookTests: XCTestCase, @unchecked Sendable {
         }
         XCTAssertEqual(ours?["matcher"].stringValue, "permission_prompt|agent_needs_input",
                        "the client filters by notification type, so a sign-in notice never reads as a request")
+        XCTAssertEqual(ours?["hooks"].arrayValue?.first?["async"], .bool(true),
+                       "that the client needs the user is a report: it goes on asking without waiting for the app")
+        XCTAssertEqual((updated["hooks"]?["Notification"].arrayValue ?? []).first { group in
+            (group["hooks"].arrayValue ?? []).contains { $0["command"].stringValue == "say hi" } }?["hooks"].arrayValue?.first?["async"], .null)
 
         try AttentionHooks.configure(.claude, enabled: false, executable: executable, home: home)
         XCTAssertFalse(AttentionHooks.isActive(.claude, home: home))

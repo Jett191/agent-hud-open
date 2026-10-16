@@ -130,6 +130,12 @@ struct IslandRootView: View {
     var onPin: () -> Void = {}
     /// Where the detached card is on screen, which a change of the window around it leaves alone.
     var cardScreenFrame: CGRect? = nil
+    /// The key of the screen this island belongs to, whose layout the hover panel draws; nil draws the shared layout.
+    var panelScreen: String? = nil
+    /// The whole panel's width in that layout (`PanelStyle.panelWidth`), and one agent's own panel's on a dock that
+    /// separates its agents (`PanelStyle.agentPanelWidth`).
+    var panelWidth = IslandController.expandedWidth
+    var agentPanelWidth = IslandController.agentPanelWidth
 
     private var detached: Bool { focusVendor != nil }
 
@@ -429,8 +435,8 @@ struct IslandRootView: View {
                            waitingRequests: waitingRequests,
                            insets: hidesSilhouette ? dockInsets : HoverPanelView.notchInsets,
                            answeringSessionID: answeringSessionID, onAnswerSession: onAnswerSession,
-                           focusVendor: focusVendor)
-                .frame(width: detached ? IslandController.agentPanelWidth : IslandController.expandedWidth, alignment: .top)
+                           focusVendor: focusVendor, screen: panelScreen)
+                .frame(width: detached ? agentPanelWidth : panelWidth, alignment: .top)
                 .fixedSize(horizontal: false, vertical: true)
                 .onPreferenceChange(PanelHeightKey.self, perform: onContentHeight)
                 .transition(detailTransition)

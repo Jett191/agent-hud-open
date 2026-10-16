@@ -554,6 +554,39 @@ final class AdditionalProviderTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(kinds, [0])
     }
 
+    func testLinesFromTheEndComeNewestFirstAndStopWhenAsked() throws {
+        let url = try file("session.jsonl", "{\"kind\":0,\"usage\":{}}\nnot json \"usage\"\n{\"kind\":1}\n\n{\"kind\":2,\"usage\":{}}\n{\"kind\":3,\"usage\":{}}\n{\"usage\":{},\"ki")
+        let marker = Data(#""usage""#.utf8)
+        var kinds: [Int] = []
+        try ProviderFiles.linesFromEnd(url, marker: marker) { value in kinds.append(value["kind"].countValue!); return true }
+        XCTAssertEqual(kinds, [3, 2, 0], "a line without the marker, one that is no JSON and a tail still being written are passed over")
+        kinds = []
+        try ProviderFiles.linesFromEnd(url, marker: marker) { value in kinds.append(value["kind"].countValue!); return false }
+        XCTAssertEqual(kinds, [3], "nothing older is decoded once the reader has what it came for")
+        try ProviderFiles.linesFromEnd(try file("empty.jsonl", ""), marker: marker) { _ in XCTFail("an empty log holds no line"); return true }
+    }
+
+    func testLinesFromTheEndMatchTheLinesFromTheStartAcrossReadsOfAnyLength() throws {
+        // Lines of every length against the reader's 256 KiB steps, one far longer than a step, and one no reader keeps.
+        var text = "", expected: [Int] = []
+        for index in 0..<900 {
+            let filler = String(repeating: "x", count: index == 400 ? 700_000 : (index * 7919) % 1500)
+            let wanted = index % 3 != 1
+            text += "{\"kind\":\(index),\(wanted ? "\"usage\":{}," : "")\"filler\":\"\(filler)\"}\n"
+            if wanted { expected.append(index) }
+            if index == 600 { text += "{\"usage\":{},\"filler\":\"" + String(repeating: "y", count: ProviderFiles.jsonLimit + 1) + "\"}\n" }
+        }
+        let url = try file("session.jsonl", text)
+        let marker = Data(#""usage""#.utf8)
+        var backward: [Int] = []
+        try ProviderFiles.linesFromEnd(url, marker: marker) { value in backward.append(value["kind"].countValue!); return true }
+        XCTAssertEqual(backward, expected.reversed(), "every line holding the marker, whole, once, newest first")
+        var forward: [Int] = []
+        XCTAssertThrowsError(try ProviderFiles.lines(url, markers: [marker]) { value, _ in forward.append(value["kind"].countValue!) },
+                             "from the start the over-long line ends the read")
+        XCTAssertEqual(forward, expected.filter { $0 <= 600 })
+    }
+
     func testLinesWithoutAMarkerAreNumberedButNotDecoded() throws {
         let url = try file("session.jsonl", "{\"kind\":0}\nnot json\n\n{\"kind\":1,\"usage\":{}}\n{\"usage\":{},\"kind\":2}")
         var read: [Int: Int] = [:]
@@ -575,6 +608,35 @@ final class AdditionalProviderTests: XCTestCase, @unchecked Sendable {
         let sessions = try GrokSessions.read(url).sessions
         XCTAssertEqual(sessions.map(\.id), ["grok:a", "grok:b", "grok:c"])
         XCTAssertEqual(sessions.flatMap(\.events).map(\.model), ["search-model", "changed-model", "catalog-model"])
+    }
+
+    func testAMonthOfTokensListsOnlyTheWeeksSessionsTurnsAndCompletions() async throws {
+        let now = now, ledger = UsageLedger.inMemory()
+        func session(_ id: String, model: String, daysAgo: Double) -> ProviderSession {
+            let at = now.addingTimeInterval(-daysAgo * 86400), ms = RecordCoding.milliseconds(at)
+            var session = ProviderSession(id: id, title: id, client: "Cursor",
+                                          events: [.init(id: "\(id)-e", model: model, timestamp: at, input: 100, output: 10)])
+            session.turns = [SessionTurn(provider: "Cursor", sessionID: id, turnID: "\(id)-t", state: .completed, startedAtMs: ms, observedAtMs: ms)]
+            session.completions = [SessionCompletion(sessionID: id, vendor: "Cursor", turnID: "\(id)-t", task: id, model: model,
+                                                     startedAt: at, completedAt: at)]
+            return session
+        }
+        let sessions = [session("recent", model: "cursor-a", daysAgo: 2), session("old", model: "cursor-b", daysAgo: 20)]
+        // The completion hook keeps its records for 30 days; only the week's are read.
+        let hooks = [("recent", 2.0), ("old", 20.0)].map { id, days in
+            SessionCompletion(sessionID: id, vendor: "Cursor", turnID: "\(id)-hook", task: id, model: "x", startedAt: nil,
+                              completedAt: now.addingTimeInterval(-days * 86400))
+        }
+        let provider = AdditionalUsageProvider(source: .cursor, readQuota: { ProviderQuota() },
+            readSessions: { _ in ProviderSessions(sessions: sessions) }, history: QuotaHistoryStore(),
+            readCompletions: { since in hooks.filter { $0.completedAt >= since } }, clock: { now }, ledger: ledger)
+        let report = try await provider.fetchUsage(agents: [], historyHours: 31 * 24 + 25)
+        XCTAssertEqual(report.sessions.map(\.id), ["recent"])
+        XCTAssertEqual(report.turns.map(\.sessionID), ["recent"])
+        XCTAssertEqual(report.completions.map(\.sessionID), ["recent", "recent"], "the session's own and its hook's, not the old ones")
+        XCTAssertEqual(Set(report.consumers.map(\.id)), ["cursor-model:cursor-a", "cursor-model:cursor-b"])
+        let recorded = try await ledger.buckets(since: now.addingTimeInterval(-31 * 86400), source: "cursor")
+        XCTAssertEqual(recorded.reduce(0) { $0 + $1.tokensIn }, 200, "both sessions' tokens are recorded")
     }
 
     func testAdditionalProviderCachesQuotaAndStillReportsLocalUsageWhenSignedOut() async throws {

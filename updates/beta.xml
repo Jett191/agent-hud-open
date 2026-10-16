@@ -41,14 +41,14 @@ Requires an Apple Silicon Mac running macOS 14 or later.
       <agenthudMinimumIOSVersion>1.5</agenthudMinimumIOSVersion>
     </item>
     <item>
-      <title>0.5.3</title>
-      <pubDate>Mon, 12 Oct 2026 17:48:10 +0800</pubDate>
-      <link>https://github.com/jazzenchen/agent-hud-open/releases/tag/v0.5.3</link>
-      <sparkle:version>485</sparkle:version>
-      <sparkle:shortVersionString>0.5.3</sparkle:shortVersionString>
+      <title>0.5.4</title>
+      <pubDate>Thu, 15 Oct 2026 22:03:13 +0800</pubDate>
+      <link>https://github.com/jazzenchen/agent-hud-open/releases/tag/v0.5.4</link>
+      <sparkle:version>486</sparkle:version>
+      <sparkle:shortVersionString>0.5.4</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-      <description sparkle:format="markdown"># Agent HUD 0.5.3
+      <description sparkle:format="markdown"># Agent HUD 0.5.4
 
 ## Compatibility
 
@@ -60,14 +60,53 @@ Requires an Apple Silicon Mac running macOS 14 or later.
 
 ## Changes
 
-- Shows an agent that is billed by use and has only a balance, such as DeepSeek through its API, on the Simple panel: its logo, an empty ring and the balance, after the agents with quota windows. With Separate agents on, hovering it reads the balance, on the Simple panel and on the Dynamic dock.
-- Keeps a hovered agent's logo as the logo while its small card shows, with Separate agents on. A click that opens the whole panel turns it into its bot, which watches the pointer until the panel closes.
-- Writes what a dock shows on hover to the dock's size: a Simple panel or Dynamic dock set larger than its default writes its hover line or bubble and its compact reminders larger too. Nothing is written smaller than at the default.
-- Makes a compact reminder on a dock a slimmer pill, 34 pt high instead of 48, and gives reminder cards the type sizes of the usage panel.
-- Keeps the line above the Tokens section from crossing the token chart's hover box, and writes the box's date once for a period inside one day.
-- Shows the closed hand while the HUD is dragged. In 0.5.1 and 0.5.2 the pointer stayed an arrow.
+### Arrange the panel
+
+- Gives the hover panel a layout, shared by every display or one of a display's own. A layout can hide or reorder the agents' blocks, their quota windows and the panel's sections; draw an agent's windows as bars, rings, numbers or a 24-hour token chart; put two blocks side by side on half a line; set the spacing, the separators and a width from 480 to 720 pt; and choose how many sessions the panel lists and which.
+- Lets a display's layout choose which agents its resting HUD shows, and in what order: the Dynamic dock's logos, the Simple panel's rings and the glow's colours.
+- Adds 24h, 7d and 30d buttons to the token chart's header.
+- Adds estimated cost to a quota block's picker: what the window's tokens would cost at their vendors' list prices. Nobody is charged this amount; a subscription is not billed by the token.
+- Adds Settings → Experimental, where Claude Code or Codex can be allowed to arrange the HUD through Agent HUD's MCP server. An agent's change shows at once as an unsaved draft with Save and Discard above the panel's footer, and nothing is saved until you press Save. It is off by default. Settings → Display gains Revert to Previous and Reset to Default for each display's layout and style.
+- Makes an agent's logo and name in the expanded panel open its latest session, such as a Codex Desktop thread or the iTerm2 pane a Claude Code session runs in.
+
+### Codex
+
+- Keeps Codex usage, sessions and turns older than a week in the statistics after Codex 0.162 compresses them into `.jsonl.zst` files.
+- Shows Codex Desktop's app approvals, browser approvals and Question cards in a conversation of any length, and its browser prompts, such as "Allow ChatGPT to access …?", as cards of their own.
+- Shows a Codex command or file approval's card in a long conversation too.
+- Shows a Codex Desktop session as needing you whenever Desktop waits on you, including for requests the HUD has no card for.
+
+### Claude Code
+
+- Lets a `claude -p` run, or an SDK host that answers no permission prompts itself, go on at once. It waited up to 10 minutes on a card nobody could answer.
+- Shows a Claude account's current plan after an upgrade, instead of the plan it signed in with ([#72](https://github.com/jazzenchen/agent-hud-open/issues/72)).
+- Ends a Claude Code turn that stops without a final answer, such as one cut off at the output limit. It showed as running for up to 30 minutes.
+
+### Other agents
+
+- Shows Antigravity's quota when only `agy` runs, without the Antigravity app ([#71](https://github.com/jazzenchen/agent-hud-open/issues/71)).
+- Shows DeepSeek's balance with only the DeepSeek Harness desktop app installed ([#69](https://github.com/jazzenchen/agent-hud-open/issues/69)), and keeps a quiet Harness desktop session running.
+
+### Faster and lighter
+
+- Lets Claude Code and Codex go on without waiting for Agent HUD at a session's start, at each prompt or after each Codex tool call.
+- Shows a long Claude Code or Codex session as soon as its newest turn is read, instead of after its whole log. This update reads the last 31 days of logs once that way; meanwhile the statistics say they are indexing, and the totals recorded before keep counting.
+- Builds sessions for the last seven days only, however far back tokens are read, so the first pass after launch takes about 3 s instead of 5 to 6. Day totals, statistics and the agent cards' tokens still cover the whole range.
+- Draws the bots for about a quarter of the processor time, pixel for pixel the same.
+- Reads Codex rollouts and prices session breakdowns with less processor time, and reads each pass's sessions once for the local network and iCloud.
+
+### iPhone and Apple Watch
+
+- Sends the phone every text message of a turn, while the turn still runs too, instead of only the last one after it ends.
+- Sends iCloud a batch every 30 seconds instead of every five minutes, so a phone away from the Mac's network is at most half a minute behind.
+- Hands a phone's message to Claude Code through Agent HUD's own Claude Code plugin, installed when remote sessions are turned on in Settings → Experimental. A session takes messages again right after Agent HUD restarts, and a message reaches the right conversation after `/clear`.
+
+### Hover and dock
+
+- Makes a dock's compact reminder and the Simple panel's hover line as tall as the dock's marks, and a reminder only as long as what it says.
+- Says after a quota window resets that its readings are being collected again and for how long, instead of "Insufficient data" ([#81](https://github.com/jazzenchen/agent-hud-open/issues/81), pull request [#80](https://github.com/jazzenchen/agent-hud-open/pull/80) by @Code-suphub).
 </description>
-      <enclosure url="https://github.com/jazzenchen/agent-hud-open/releases/download/v0.5.3/Agent-HUD-0.5.3-arm64.dmg" length="13217651" type="application/octet-stream" sparkle:edSignature="j68LGQpx0aa3zT23IDMAz0A7jifkCLfWNodc8s2EU6hRo/ZC7HnELPFUP3bbnuv2nGojTUv9emiYX50TECxQAw==" />
+      <enclosure url="https://github.com/jazzenchen/agent-hud-open/releases/download/v0.5.4/Agent-HUD-0.5.4-arm64.dmg" length="14270288" type="application/octet-stream" sparkle:edSignature="da2JmZWkkeImZ6jWzloZSplpOoK6fzvr5CGX8viuzq3m1xNBUR9MPewsE4Wom43lhrCJczMDfetHnmMQ5PWbCQ==" />
       <agenthudMacOnly>false</agenthudMacOnly>
       <agenthudMinimumIOSVersion>1.5</agenthudMinimumIOSVersion>
     </item>

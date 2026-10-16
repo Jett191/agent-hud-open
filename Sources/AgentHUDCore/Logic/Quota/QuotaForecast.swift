@@ -10,8 +10,16 @@ public enum QuotaForecast {
     public static func hint(snapshot: UsageSnapshot, insights: UsageInsights?, now: Date) -> String? {
         guard let remaining = snapshot.remainingPct else { return nil }
         let used = max(0, min(100, 100 - remaining))
-        return text(of: QuotaMath.outlook(snapshot: snapshot, insights: insights, now: now),
+        let outlook = QuotaMath.outlook(snapshot: snapshot, insights: insights, now: now)
+        if let sampling = sampling(outlook: outlook, insights: insights) { return sampling.hint }
+        return text(of: outlook,
                     projectedUsedAtReset: QuotaMath.projectedUsedAtReset(usedPct: used, insights: insights, resetAt: snapshot.resetAt, now: now))
+    }
+
+    /// How far a window's readings have come while they are still too few for its outlook. The hover hint and the island
+    /// row's burn rate both say it in place of "Insufficient data", so they agree. Nil for any other outlook.
+    public static func sampling(outlook: QuotaOutlook, insights: UsageInsights?) -> QuotaSampling? {
+        outlook == .insufficientData ? insights?.sampling : nil
     }
 
     /// An outlook in words: nothing for a window without a reset, how long the rest lasts for one that runs out before

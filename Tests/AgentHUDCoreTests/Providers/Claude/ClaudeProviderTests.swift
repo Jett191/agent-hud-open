@@ -520,6 +520,70 @@ final class ClaudeTranscriptTests: XCTestCase {
         XCTAssertEqual(turn.observedAtMs, RecordCoding.milliseconds(try XCTUnwrap(DateParsing.iso8601("2026-09-28T10:44:37.494Z"))))
     }
 
+    func testAStopHookSummaryOrATurnDurationEndsATurnThatNoEndTurnCompleted() throws {
+        // Lines as Claude Code 2.1 writes them, keys and lines in its own order.
+        let tail = #""userType":"external","entrypoint":"cli","cwd":"/p","sessionId":"s-stop","version":"2.1.273","gitBranch":"main"}"#
+        func prompt(_ text: String, at time: String) -> String {
+            #"{"parentUuid":null,"isSidechain":false,"promptId":"p-\#(time)","type":"user","message":{"role":"user","content":"\#(text)"},"uuid":"u-\#(time)","timestamp":"2026-10-14T10:\#(time)Z","permissionMode":"default",\#(tail)"#
+        }
+        func answer(_ block: String, stop: String, output: Int = 40, at time: String) -> String {
+            #"{"parentUuid":"u","isSidechain":false,"message":{"model":"claude-opus-5-5","id":"msg_\#(time)","type":"message","role":"assistant","content":[\#(block)],"stop_reason":"\#(stop)","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":3,"cache_creation_input_tokens":20,"cache_read_input_tokens":900,"output_tokens":\#(output)}},"requestId":"req_\#(time)","type":"assistant","uuid":"a-\#(time)","timestamp":"2026-10-14T10:\#(time)Z",\#(tail)"#
+        }
+        let apiError = #"{"parentUuid":"u","isSidechain":false,"type":"assistant","uuid":"e","timestamp":"2026-10-14T10:01:09.627Z","message":{"diagnostics":null,"id":"e1","container":null,"model":"<synthetic>","role":"assistant","stop_details":null,"stop_reason":"stop_sequence","stop_sequence":"","type":"message","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"API Error: Can't reach the API server"}]},"isApiErrorMessage":true,\#(tail)"#
+        let result = #"{"parentUuid":"a","isSidechain":false,"promptId":"p","type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"ok","is_error":false}]},"uuid":"r","timestamp":"2026-10-14T10:00:06.000Z","toolUseResult":{"stdout":"ok"},"sourceToolAssistantUUID":"a",\#(tail)"#
+        let hook = #"{"parentUuid":"a","isSidechain":false,"attachment":{"type":"hook_success","hookName":"Stop","toolUseID":"t","hookEvent":"Stop","content":"","stdout":"","stderr":"","exitCode":0,"command":"callback","durationMs":12},"type":"attachment","uuid":"h","timestamp":"2026-10-14T10:00:40.300Z",\#(tail)"#
+        let queued = #"{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-14T10:09:00.000Z","sessionId":"s-stop","content":"and then"}"#
+        func summary(at time: String) -> String {
+            #"{"parentUuid":"a","isSidechain":false,"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"callback"}],"hookErrors":[],"hookAdditionalContext":[],"preventedContinuation":false,"stopReason":"","hasOutput":false,"level":"suggestion","timestamp":"2026-10-14T10:\#(time)Z","uuid":"s-\#(time)","toolUseID":"t",\#(tail)"#
+        }
+        func duration(at time: String) -> String {
+            #"{"parentUuid":"a","isSidechain":false,"type":"system","subtype":"turn_duration","durationMs":8451,"messageCount":7,"timestamp":"2026-10-14T10:\#(time)Z","uuid":"d-\#(time)","isMeta":false,\#(tail)"#
+        }
+        func ingest(_ lines: [String]) -> (events: [TranscriptEvent], accumulator: TranscriptAccumulator) {
+            let text = lines.joined(separator: "\n") + "\n"
+            let fast = FastTranscriptParser.parse(Data(text.utf8))
+            XCTAssertEqual(fast.map(\.isStop), ClaudeTranscriptParser.parse(text).map(\.isStop), "both parsers see the same stops")
+            var accumulator = TranscriptAccumulator(path: "/p/s-stop.jsonl", isSubagent: false)
+            accumulator.ingest(fast)
+            return (fast, accumulator)
+        }
+        func ms(_ time: String) -> Int64 { RecordCoding.milliseconds(DateParsing.iso8601("2026-10-14T10:\(time)Z")!) }
+
+        // An answer cut off at max_tokens leaves no end_turn; Claude Code then runs the Stop hooks and writes their summary.
+        let cutOff = [prompt("Summarise the plan", at: "00:00.000"),
+                      answer(#"{"type":"tool_use","id":"toolu_1","name":"Read","input":{}}"#, stop: "tool_use", at: "00:05.000"), result,
+                      answer(#"{"type":"text","text":"The plan has three"}"#, stop: "max_tokens", output: 32000, at: "00:40.000"), hook, queued]
+        XCTAssertEqual(ingest(cutOff).accumulator.build()?.turn?.state, .running, "a cut-off answer alone does not end the turn")
+        let read = ingest(cutOff + [summary(at: "00:40.350")])
+        XCTAssertEqual(read.events.map(\.isStop), [false, false, false, false, false, false, true])
+        let stopped = try XCTUnwrap(read.accumulator.build())
+        XCTAssertEqual(stopped.turn?.state, .completed, "the Stop hooks' summary ends the turn")
+        XCTAssertEqual(stopped.turn?.observedAtMs, ms("00:40.350"))
+        XCTAssertEqual(stopped.turn?.startedAtMs, ms("00:00.000"))
+        XCTAssertEqual(stopped.turn?.message, "The plan has three")
+        XCTAssertEqual(stopped.completions, [], "a turn that gave no complete answer is not announced as one")
+        XCTAssertFalse(stopped.isLive(now: Date(timeIntervalSince1970: Double(ms("00:41.000")) / 1000), threshold: 120))
+        // A Stop hook that sends the agent back to work leaves it working again.
+        let resumed = ingest(cutOff + [summary(at: "00:40.350"), answer(#"{"type":"text","text":"Continuing"}"#, stop: "tool_use", at: "00:45.000")])
+        XCTAssertEqual(resumed.accumulator.build()?.turn?.state, .running)
+
+        // A failed request ends with a synthetic message and, in builds that time turns, the turn's duration.
+        let failed = ingest([prompt("Try again", at: "01:00.000"), apiError, duration(at: "01:09.638")]).accumulator.build()
+        XCTAssertEqual(failed?.turn?.state, .completed)
+        XCTAssertEqual(failed?.turn?.observedAtMs, ms("01:09.638"))
+
+        // After end_turn, or after an interruption, the line that follows changes nothing.
+        let answered = ingest([prompt("Explain", at: "02:00.000"), answer(#"{"type":"text","text":"Done"}"#, stop: "end_turn", at: "02:10.000"),
+                               hook, summary(at: "02:10.402")]).accumulator.build()
+        XCTAssertEqual(answered?.turn?.state, .completed)
+        XCTAssertEqual(answered?.turn?.observedAtMs, ms("02:10.000"))
+        XCTAssertEqual(answered?.completions.count, 1)
+        let interrupted = ingest([prompt("Ask me", at: "03:00.000"),
+                                  answer(#"{"type":"tool_use","id":"toolu_2","name":"AskUserQuestion","input":{}}"#, stop: "tool_use", at: "03:02.000"),
+                                  prompt("[Request interrupted by user for tool use]", at: "03:30.614"), duration(at: "03:30.616")]).accumulator.build()
+        XCTAssertEqual(interrupted?.turn?.state, .ended)
+    }
+
     func testAnAgentWokenWithoutAPromptResumesItsTurn() throws {
         let base = Date(timeIntervalSince1970: 1_800_000_000)
         func event(_ offset: Double, role: TranscriptEvent.Role = .assistant, prompt: String? = nil, stop: String? = nil, id: String? = nil) -> TranscriptEvent {
@@ -983,6 +1047,39 @@ final class ClaudeCodeProviderTests: XCTestCase {
                        "each account refresh asks the engine; how often is the collector's to decide")
     }
 
+    func testAMonthOfTokensListsOnlyTheSessionsOfTheLastSevenDays() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let now = Date()
+        func reply(_ session: String, model: String, daysAgo: Double) throws {
+            let at = now.addingTimeInterval(-daysAgo * 86400), file = directory.appendingPathComponent("\(session).jsonl")
+            try (#"{"sessionId":"\#(session)","type":"assistant","message":{"id":"msg_\#(session)","role":"assistant","model":"\#(model)","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":20}},"timestamp":"\#(at.ISO8601Format())","entrypoint":"cli"}"# + "\n")
+                .write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.modificationDate: at], ofItemAtPath: file.path)
+        }
+        try reply("recent", model: "claude-opus-5", daysAgo: 2)
+        try reply("old", model: "claude-haiku-4-5", daysAgo: 20)
+        let transcripts = ClaudeTranscriptStore(root: directory)
+        let provider = ClaudeCodeProvider(engine: nil, transcripts: transcripts, history: QuotaHistoryStore(), clock: { now })
+        // The host widens the hours to a month, as it does while the local network is on.
+        let report = try await provider.fetchUsage(agents: [], historyHours: 31 * 24 + 25)
+        XCTAssertEqual(report.sessions.map(\.id), ["recent"])
+        XCTAssertEqual(Set(report.consumers.map(\.id)), ["claude-model:claude-opus-5", "claude-model:claude-haiku-4-5"],
+                       "models still come from the month the tokens are read for")
+        let recorded = await transcripts.usage(since: now.addingTimeInterval(-31 * 86400))
+        XCTAssertEqual(recorded.reduce(0) { $0 + $1.tokensIn }, 200, "both logs' tokens are recorded")
+
+        // With no session of the week left, a failed engine read still keeps the month's local data.
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("recent.jsonl"))
+        let quiet = ClaudeCodeProvider(engine: try fakeEngine(script: "#!/bin/bash\nread -r l\necho boom >&2\nexit 1\n"),
+                                       transcripts: ClaudeTranscriptStore(root: directory), history: QuotaHistoryStore(), clock: { now })
+        let local = try await quiet.fetchAccountAndLocalUsage(agents: [], historyHours: 31 * 24 + 25)
+        XCTAssertEqual(local.sessions.map(\.id), [])
+        XCTAssertEqual(local.consumers.map(\.id), ["claude-model:claude-haiku-4-5"])
+        XCTAssertEqual(local.typedReadingIssues["Claude"]?.kind, .readFailed, "the engine's failure is the report's notice")
+    }
+
     func testASessionKeepsRunningWhileItsSubagentsWork() async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent("agenthud-\(UUID().uuidString)", isDirectory: true)
         let project = base.appendingPathComponent("projects/-p", isDirectory: true)
@@ -1099,5 +1196,29 @@ final class AccumulatorCompactionTests: XCTestCase {
         old.compactIfFinished(now: stamp.addingTimeInterval(3 * 86400))
         counted += old.ingest(ClaudeTranscriptParser.parse(line)).count
         XCTAssertEqual(counted, 2, "after compaction the keys are gone; finished files never get appended anyway, and the ledger keeps one row per key")
+    }
+
+    func testAnIdleLogReadOverTwoPollsCountsAResponseSplitBetweenThemOnce() async throws {
+        // Claude Code writes a line per content block of a response, each with its usage. A day-old log read from its start
+        // stops at 4 MiB on no time budget (`TailLogStore.chunkSize`), here between the two blocks of one response.
+        let projects = FileManager.default.temporaryDirectory.appendingPathComponent("agenthud-split-\(UUID().uuidString)/projects", isDirectory: true)
+        try FileManager.default.createDirectory(at: projects.appendingPathComponent("-p"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: projects.deletingLastPathComponent()) }
+        let stamp = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-2 * 86400))
+        func block(_ type: String, output: Int) -> String {
+            #"{"parentUuid":"r","isSidechain":false,"message":{"model":"claude-opus-5-5","id":"msg_split","type":"message","role":"assistant","content":[{"type":"\#(type)","\#(type)":"…"}],"stop_reason":null,"usage":{"input_tokens":3,"output_tokens":\#(output)}},"requestId":"req_split","type":"assistant","uuid":"a-\#(type)","timestamp":"\#(stamp)","sessionId":"s-split"}"#
+        }
+        let first = block("thinking", output: 16), second = block("text", output: 231)
+        let output = String(repeating: "x", count: (4 << 20) - first.utf8.count - 300)
+        let result = #"{"parentUuid":"p","isSidechain":false,"type":"user","message":{"role":"user","content":[{"tool_use_id":"t","type":"tool_result","content":"\#(output)"}]},"uuid":"r","timestamp":"\#(stamp)","sessionId":"s-split"}"#
+        try ([result, first, second].joined(separator: "\n") + "\n").write(to: projects.appendingPathComponent("-p/s-split.jsonl"), atomically: true, encoding: .utf8)
+        let store = ClaudeTranscriptStore(roots: [projects], ledger: UsageLedger.inMemory())
+        var pass = await store.index(modifiedSince: .distantPast, timeBudget: 0)
+        XCTAssertEqual(pass.pending, 1, "the read stopped after the first block")
+        pass = await store.index(modifiedSince: .distantPast, timeBudget: 0)
+        XCTAssertEqual(pass.pending, 0)
+        XCTAssertEqual(pass.sessions.first?.tokensOut, 16, "the response counts once, from its first line, as in a read in one go")
+        let usage = await store.usage(since: .distantPast)
+        XCTAssertEqual(usage.reduce(0) { $0 + $1.tokensOut }, 16)
     }
 }

@@ -89,6 +89,27 @@ final class ClaudeEngineTests: XCTestCase {
         XCTAssertEqual(ClaudeEngineLocator.find(home: home, path: elsewhere.path), bin)
     }
 
+    func testLocatorFallsBackToTheDesktopAppsEngine() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("agenthud-home-\(UUID().uuidString)", isDirectory: true)
+        let root = home.appendingPathComponent("Library/Application Support/Claude/claude-code", isDirectory: true)
+        func engine(_ version: String, _ build: String) throws -> URL {
+            let url = root.appendingPathComponent("\(version)/\(build)/claude.app/Contents/MacOS/claude")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "#!/bin/sh\n".write(to: url, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+            return url
+        }
+        _ = try engine("2.1.99", "9d6405864fdc")
+        let newest = try engine("2.1.295", "1a2b3c4d5e6f")
+        XCTAssertEqual(ClaudeEngineLocator.find(home: home, path: ""), newest, "a Mac with only the desktop app has its engine")
+        let onPath = home.appendingPathComponent("elsewhere/claude")
+        try FileManager.default.createDirectory(at: onPath.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "#!/bin/sh\n".write(to: onPath, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: onPath.path)
+        XCTAssertEqual(ClaudeEngineLocator.find(home: home, path: onPath.deletingLastPathComponent().path), onPath,
+                       "any CLI engine, even one only on PATH, comes before the desktop app's")
+    }
+
     func testClientRunsAFakeEngine() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("agenthud-engine-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

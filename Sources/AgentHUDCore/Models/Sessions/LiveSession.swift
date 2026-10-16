@@ -8,7 +8,10 @@ public struct LiveSession: Hashable, Codable, Sendable, Identifiable {
     public let terminal: String?
     public let startedAt: Date
     public let endedAt: Date?
-    /// When the provider last checked this session's activity. Cache reads do not advance it.
+    /// The newest evidence of what the session is doing that its provider holds (`SessionPhase.SourceEvidence.newest`):
+    /// its turn's latest observation, its log's last record, its sub-agents' newest line, its client's request for
+    /// approval, or a process check that has its turn in flight. Reading the source again without new evidence does not
+    /// move it, so a session whose source did not move reads the same from one pass to the next.
     public let observedAt: Date
     /// Share of the current quota window consumed by this session, in %.
     public let pctOfWindow: Double?
@@ -29,7 +32,7 @@ public struct LiveSession: Hashable, Codable, Sendable, Identifiable {
     /// The agents this session directly started, each with its own descendants.
     public let subagentSessions: [LiveSession]?
     /// When the session's source last recorded anything for it, a log's last line or newest event, where the provider
-    /// reads that. Unlike `observedAt`, reading the log again does not move it.
+    /// reads that. Like `observedAt`, reading the log again does not move it.
     public let lastActivityAt: Date?
     /// Source-owned destination for returning to this session on this Mac; never encoded in a session report.
     public let navigationTarget: SessionNavigationTarget?
@@ -87,9 +90,9 @@ public struct LiveSession: Hashable, Codable, Sendable, Identifiable {
     /// An internal Bot child known only through its billing contribution, without native conversation metadata.
     public var isBillingOnlyGrokBotSubagent: Bool { GrokBotUsage.isBillingOnlySubagent(self) }
 
-    /// Running, as far as this Mac can still vouch for it: for `SessionPhase.Limits.vouched` after the reading that had
-    /// it in flight. A source that has not been read for longer than a turn may stay quiet — a retained result, a Mac
-    /// that stopped collecting — no longer speaks for the session.
+    /// Running, as far as this Mac can still vouch for it: for `SessionPhase.Limits.vouched` after the newest evidence
+    /// that has it in flight. Evidence older than a turn may stay quiet — a retained result, a Mac that stopped
+    /// collecting — no longer speaks for the session.
     public func isLive(at now: Date) -> Bool {
         isLive && now.timeIntervalSince(observedAt) < SessionPhase.Limits.vouched
     }
@@ -132,7 +135,7 @@ public struct LiveSession: Hashable, Codable, Sendable, Identifiable {
 
     /// When this session last did something, given the newest turn event its source reported for it. A source that
     /// reports no turns leaves the session's own end, or — while it runs — when its log last recorded anything, else the
-    /// reading that last saw it running.
+    /// newest evidence that it runs.
     public func lastEvent(turnAt: Date?) -> Date {
         guard let turnAt else { return endedAt ?? lastActivityAt ?? observedAt }
         return max(turnAt, endedAt ?? startedAt)

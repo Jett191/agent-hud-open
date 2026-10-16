@@ -72,6 +72,11 @@ struct BotSpec: Sendable {
         case notch([CGPoint])
         /// A dark line drawn on the body.
         case line([CGPoint], width: CGFloat)
+
+        /// The piece rides with the eyes when the bot looks around.
+        var followsFace: Bool {
+            if case .blocks(_, _, let follows) = self { follows } else { false }
+        }
     }
 
     var radius: CGFloat = 0.36

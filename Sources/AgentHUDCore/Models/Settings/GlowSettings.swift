@@ -19,6 +19,13 @@ public struct GlowSettings: Hashable, Codable, Sendable {
     public static let gridCoreRange: ClosedRange<Double> = 0...8
     public static let gridFadeRange: ClosedRange<Double> = 0...8
     public static let gridDensityRange: ClosedRange<Double> = 0.5...1.5
+    /// How bright the glow is drawn, as a share of its full strength; Settings offers 20 to 100%.
+    public static let brightnessRange: ClosedRange<Double> = 0.2...1
+    /// How deep a breath dips, as a share of the glow's opacity; Settings offers 0 to 100%.
+    public static let amplitudeRange: ClosedRange<Double> = 0...1
+    /// The period an effect plays at while an agent works, in seconds, as Settings offers it. The idle period may run
+    /// slower, to the end of `breathSecondsRange`.
+    public static let workingPeriodRange: ClosedRange<Double> = 1...12
 
     public var style: GlowStyle = .blur
     public var effect: GlowEffect = .breathe

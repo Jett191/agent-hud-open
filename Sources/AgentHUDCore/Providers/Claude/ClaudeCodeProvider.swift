@@ -87,11 +87,14 @@ public struct ClaudeCodeProvider: UsageProvider, LedgerRecording {
         let weekAgo = now.addingTimeInterval(-AlertPolicy.insightsLookback)
         let cutoff = min(weekAgo, now.addingTimeInterval(-TimeInterval(historyHours) * 3600))
 
-        // Local data: one cooperative indexing step (newest files first); the rest continues on later polls.
+        // Local data: one cooperative indexing step (newest files first); the rest continues on later polls. Tokens and
+        // models come from every log of `historyHours`; sessions only from those active in the session window.
         let indexed = await transcripts.index(modifiedSince: cutoff)
-        let sessions = indexed.sessions
-        let indexing = indexed.pending > 0 ? IndexProgress(done: sessions.count, total: sessions.count + indexed.pending) : nil
-        let observations: [(modelId: String, seenAt: Date)] = sessions.flatMap { session in
+        let sessionStart = SessionWindow.start(at: now)
+        let sessions = indexed.sessions.filter { $0.lastActivityAt >= sessionStart }
+        let indexing = indexed.pending > 0
+            ? IndexProgress(done: indexed.sessions.count, total: indexed.sessions.count + indexed.pending) : nil
+        let observations: [(modelId: String, seenAt: Date)] = indexed.sessions.flatMap { session in
             session.modelsSeen.map { (modelId: $0.key, seenAt: $0.value) }
         }
         // All observed models are consumers; quota rows remain the plan's independent windows below.
@@ -117,8 +120,9 @@ public struct ClaudeCodeProvider: UsageProvider, LedgerRecording {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            // Quota availability does not determine whether a local turn completed.
-            guard !sessions.isEmpty else { throw error }
+            // Quota availability does not determine whether a local turn completed. Any log read, listed or not, is local
+            // data whose tokens and models the report keeps.
+            guard !indexed.sessions.isEmpty else { throw error }
             notice = error.localizedDescription
             failure = notice
         }
@@ -149,9 +153,8 @@ public struct ClaudeCodeProvider: UsageProvider, LedgerRecording {
         let agents = Self.workingAgents(sessions, now: now)
         let requests = AttentionHooks.read(source: AttentionHooks.Source.claude, now: now)
         let candidates = sessions.filter { !$0.isSubagent }.map { session in
-            (session: session, reading: SessionPhase.read(session.evidence(subagentsAt: agents[session.path],
-                                                                           approval: requests[session.id]?.approval),
-                                                          rule: .transcript, at: now))
+            let evidence = session.evidence(subagentsAt: agents[session.path], approval: requests[session.id]?.approval)
+            return (session: session, evidence: evidence, reading: SessionPhase.read(evidence, rule: .transcript, at: now))
         }.sorted { lhs, rhs in
             if lhs.reading.inFlight != rhs.reading.inFlight { return lhs.reading.inFlight }
             return lhs.session.lastActivityAt > rhs.session.lastActivityAt
@@ -208,7 +211,7 @@ public struct ClaudeCodeProvider: UsageProvider, LedgerRecording {
             }
             return ClaudeSessionOrigins.desktopHost(session.entrypoint).flatMap { desktopTarget(for: session.id, host: $0) }
         }
-        let listed = candidates.map { session, reading -> LiveSession in
+        let listed = candidates.map { session, evidence, reading -> LiveSession in
             let live = reading.inFlight
             let share = windowTotal > 0 ? Double(windowTokens[session.path] ?? 0) / Double(windowTotal) : 0
             let agentId = session.dominantAgentId
@@ -225,7 +228,7 @@ public struct ClaudeCodeProvider: UsageProvider, LedgerRecording {
                 tokensOut: session.tokensOut,
                 client: ClaudeEntrypoint.clientLabel(session.entrypoint),
                 transcriptPath: session.path,
-                cacheReadTokens: session.cacheReadTokens, observedAt: now, workingDirectory: session.cwd,
+                cacheReadTokens: session.cacheReadTokens, observedAt: evidence.newest, workingDirectory: session.cwd,
                 lastActivityAt: session.lastActivityAt,
                 navigationTarget: navigationTarget(for: session)
             )

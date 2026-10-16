@@ -12,16 +12,25 @@ struct GlowPane: View {
     /// The display being edited. Every control here writes that screen's own glow.
     var screen: String = ""
 
-    private var glow: GlowSettings { settings.settings.glow(on: screen) }
+    /// The selected screen's glow as its HUD draws it now, an agent's unsaved style included.
+    private var glow: GlowSettings { settings.effectiveGlow(on: screen) }
 
-    /// Edits one field of the selected screen's glow, leaving the rest of it as stored.
+    /// What the screen's resting HUD shows of the agents under its layout, which the preview's colours follow.
+    private var agents: ScreenAgents {
+        ScreenAgents(store: store, listed: settings.panelLayout.effective(for: screen).hud.agents, mode: placement.mode)
+    }
+
+    /// Edits one field of the selected screen's glow, leaving the rest of it as stored. A person's edit drops an agent's
+    /// unsaved style for the screen first, so the field is written over the glow the screen has saved.
     private func binding<Value>(_ field: WritableKeyPath<GlowSettings, Value>) -> Binding<Value> {
         Binding(
             get: { glow[keyPath: field] },
-            set: { value in
-                var next = glow
-                next[keyPath: field] = value
-                settings.update { $0.screenGlow[screen] = next }
+            set: { [screen] value in
+                settings.updateScreen(screen) {
+                    var next = $0.glow(on: screen)
+                    next[keyPath: field] = value
+                    $0.screenGlow[screen] = next
+                }
             }
         )
     }
@@ -50,7 +59,7 @@ struct GlowPane: View {
                                              metrics: metrics, screen: screen)
                         } else {
                             GlowPreview(
-                                appearance: store.glowAppearance(light: false, on: screen), settings: current,
+                                appearance: agents.glowAppearance(light: false, on: screen), settings: current,
                                 islandSize: metrics.islandSize, islandRadius: metrics.islandRadius,
                                 previewsMotion: true
                             )
@@ -83,7 +92,9 @@ struct GlowPane: View {
                           format: rows, theme: theme)
                 SettingsDivider(theme: theme)
             }
-            SliderRow(label: L10n.text("光晕亮度", "Brightness"), value: percent(\.brightness), range: 20...100, step: 5, format: { "\(Int($0))%" }, theme: theme)
+            SliderRow(label: L10n.text("光晕亮度", "Brightness"), value: percent(\.brightness),
+                      range: GlowSettings.brightnessRange.lowerBound * 100...GlowSettings.brightnessRange.upperBound * 100,
+                      step: 5, format: { "\(Int($0))%" }, theme: theme)
             if !grid {
                 SettingsDivider(theme: theme)
                 SliderRow(label: L10n.text("光晕范围", "Glow range"), value: binding(\.range), range: GlowSettings.sizeRange, step: 1, format: { "\(Int($0)) px" }, theme: theme)
@@ -99,12 +110,16 @@ struct GlowPane: View {
             let seconds: (Double) -> String = { String(format: L10n.text("%.1f 秒", "%.1f s"), $0) }
             // The period drives whichever effect is selected, not just breathing; only the depth is breathe's own.
             SettingsDivider(theme: theme)
-            SliderRow(label: L10n.text("工作时周期", "Working period"), value: binding(\.breathSeconds), range: 1...12, step: 0.5, format: seconds, theme: theme)
+            SliderRow(label: L10n.text("工作时周期", "Working period"), value: binding(\.breathSeconds),
+                      range: GlowSettings.workingPeriodRange, step: 0.5, format: seconds, theme: theme)
             SettingsDivider(theme: theme)
-            SliderRow(label: L10n.text("空闲时周期", "Idle period"), value: binding(\.idleBreathSeconds), range: 1...24, step: 0.5, format: seconds, theme: theme)
+            SliderRow(label: L10n.text("空闲时周期", "Idle period"), value: binding(\.idleBreathSeconds),
+                      range: GlowSettings.breathSecondsRange, step: 0.5, format: seconds, theme: theme)
             if current.effect == .breathe {
                 SettingsDivider(theme: theme)
-                SliderRow(label: L10n.text("呼吸幅度", "Breath depth"), value: percent(\.breathAmplitude), range: 0...100, step: 5, format: { "\(Int($0))%" }, theme: theme)
+                SliderRow(label: L10n.text("呼吸幅度", "Breath depth"), value: percent(\.breathAmplitude),
+                          range: GlowSettings.amplitudeRange.lowerBound * 100...GlowSettings.amplitudeRange.upperBound * 100,
+                          step: 5, format: { "\(Int($0))%" }, theme: theme)
             }
             Text(caption(grid: grid, effect: current.effect))
                 .font(.ui(11)).foregroundStyle(theme.secondary)
@@ -192,14 +207,22 @@ struct LogoQueuePreview: View {
         return sample
     }
 
+    /// The marks and the backdrop's colours the screen's resting HUD shows under its layout.
+    private var agents: ScreenAgents {
+        ScreenAgents(store: store, listed: settings.panelLayout.effective(for: screen).hud.agents, mode: placement.mode)
+    }
+
     var body: some View {
-        let items = marks ?? LogoQueueItem.queue(rows: store.queueVendors)
+        let agents = agents
+        let items = marks ?? agents.queueItems
         let config = LogoQueueConfig(items: items, placement: samplePlacement, settings: settings.settings)
         let strip = config.stripThickness
         let margin = GlowWindowController.logoEdgeMargin(stripThickness: strip)
         // The lip is run past the marks by the same amount the real backdrop uses, so the preview's field
         // falls as steeply as the one on screen instead of by a number of its own.
-        let overhang = GlowWindowController.backdropOverhang(settings.settings.glow(on: screen))
+        // The screen's glow as its HUD draws it now, an agent's unsaved style included.
+        let glow = settings.effectiveGlow(on: screen)
+        let overhang = GlowWindowController.backdropOverhang(glow)
         GeometryReader { proxy in
             // The marks' run plus the same margin the real backdrop reaches past them, faded over exactly
             // that distance so the ends die away instead of being cut.
@@ -207,8 +230,8 @@ struct LogoQueuePreview: View {
             let stop = margin / width
             ZStack(alignment: .top) {
                 GlowPreview(
-                    appearance: store.glowAppearance(light: false, on: screen),
-                    settings: settings.settings.glow(on: screen),
+                    appearance: agents.glowAppearance(light: false, on: screen),
+                    settings: glow,
                     islandSize: CGSize(width: width + overhang * 2, height: 2), islandRadius: 0, previewsMotion: true
                 )
                 .frame(width: width, alignment: .center)

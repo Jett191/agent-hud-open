@@ -23,6 +23,25 @@ import Testing
     #expect(try JSONValue.parse(Data("9007199254740993.0".utf8)) == .integer(9_007_199_254_740_993), "whole numbers keep every digit")
 }
 
+@Test func parsingCanLeaveOutLongStringsAndKeepsEverythingAroundThem() throws {
+    let long = String(repeating: "x", count: 40) + #"\"quoted\" \\"# + String(repeating: "é", count: 20)
+    let text = #"{"image":"\#(long)","items":[{"type":"text","text":"\#(long)","id":7},"\#(long)","short \" \\"],"after":{"n":1.5,"ok":true,"k\"ey":"v"},"edge":"12345678"}"#
+    let whole = try JSONValue.parse(Data(text.utf8))
+    #expect(try JSONValue.parse(Data(text.utf8), leavingOutStringsOver: 4096) == whole, "nothing is long enough to leave out")
+    let pruned = try JSONValue.parse(Data(text.utf8), leavingOutStringsOver: 8)
+    #expect(pruned == .object([
+        "image": .null,
+        "items": .array([.object(["type": .string("text"), "text": .null, "id": .integer(7)]), .null, .null]),
+        "after": .object(["n": .number(1.5), "ok": .bool(true), "k\"ey": .string("v")]),
+        "edge": .string("12345678"),
+    ]), "a string of exactly the limit stays, a longer one reads as null, and a key is read whole")
+    // A long string is passed over by its quotes alone, so what it holds is not checked; what follows it still is.
+    #expect(try JSONValue.parse(Data([0x5B, 0x22, 0xFF, 0xFE, 0x41, 0x22, 0x5D]), leavingOutStringsOver: 2) == .array([.null]))
+    for malformed in [#"["\#(long)"#, #"["\#(long)",]"#, #"{"a":"\#(long)" "b":1}"#, #"["\#(long)\"]"#, ""] {
+        #expect(throws: (any Error).self, "\(malformed.prefix(12))") { try JSONValue.parse(Data(malformed.utf8), leavingOutStringsOver: 8) }
+    }
+}
+
 @Test func recordIdentitiesHaveUnambiguousComponents() {
     #expect(RecordCoding.hash(["ab", "c"]) != RecordCoding.hash(["a", "bc"]))
     #expect(RecordCoding.hash(["", "a"]) != RecordCoding.hash(["a", ""]))

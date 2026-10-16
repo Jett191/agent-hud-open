@@ -22,6 +22,15 @@ final class BotForm {
     let logoReach: [CGFloat]
     let bodyReach: [CGFloat]
     let field: CGImage?
+    /// The last outline drawn, and the moment of the morph it was drawn for. A bot that does not spin asks
+    /// for the same one every frame once it has turned into its bot.
+    private var lastOutline: (eased: CGFloat, turn: CGFloat, path: CGPath)?
+
+    /// Which way each sample points from the centre, as a step of one.
+    private static let directions: [CGPoint] = (0..<samples).map { index in
+        let angle = CGFloat(index) * 2 * .pi / CGFloat(samples)
+        return CGPoint(x: cos(angle), y: sin(angle))
+    }
 
     private static var cache: [String: BotForm?] = [:]
 
@@ -96,6 +105,33 @@ final class BotForm {
     }
 
     // MARK: Outlines
+
+    /// The outline at one moment of the morph: the logo's reach blended, angle by angle, with the body's.
+    func outline(eased: CGFloat, turn: CGFloat) -> CGPath {
+        if let last = lastOutline, last.eased == eased, last.turn == turn { return last.path }
+        let count = Self.samples, center = spec.center
+        var points = [CGPoint](repeating: .zero, count: count)
+        logoReach.withUnsafeBufferPointer { logo in
+            bodyReach.withUnsafeBufferPointer { body in
+                Self.directions.withUnsafeBufferPointer { directions in
+                    for index in 0..<count {
+                        // The body turns under the face, so its reach is read `turn` degrees back.
+                        var from = (CGFloat(index) - turn).truncatingRemainder(dividingBy: CGFloat(count))
+                        if from < 0 { from += CGFloat(count) }
+                        let low = Int(from) % count, part = from - CGFloat(Int(from))
+                        let turned = body[low] + (body[(low + 1) % count] - body[low]) * part
+                        let reach = logo[index] + (turned - logo[index]) * eased
+                        points[index] = CGPoint(x: center.x + directions[index].x * reach, y: center.y + directions[index].y * reach)
+                    }
+                }
+            }
+        }
+        let path = CGMutablePath()
+        path.addLines(between: points)
+        path.closeSubpath()
+        lastOutline = (eased, turn, path)
+        return path
+    }
 
     /// How far the opaque pixels reach from `center`, per degree, as a share of the side.
     private static func reach(alphaOf pixels: [UInt8], from center: CGPoint) -> [CGFloat] {

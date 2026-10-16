@@ -1,4 +1,3 @@
-import Accelerate
 import AppKit
 import AgentHUDCore
 import CoreGraphics
@@ -31,26 +30,22 @@ enum BotRenderer {
     private static let ink = CGColor(srgbRed: 0.05, green: 0.05, blue: 0.06, alpha: 1)
     private static let box = CGRect(x: 0, y: 0, width: 1, height: 1)
 
-    /// A frame's bitmap, in the byte order and the colours of the display it is for. A layer given any other
-    /// picture draws it once more, through a colour conversion, before it can show it: for a bot that is drawn again
-    /// with every blink, that cost as much as drawing the bot.
-    private static func canvas(_ side: Int, space: CGColorSpace?) -> CGContext? {
-        let layout = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
-        if let space, space.model == .rgb,
-           let context = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
-                                   space: space, bitmapInfo: layout) { return context }
-        return CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
-                         space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: layout)
-    }
-
     /// One frame, `side` pixels to the mark's side, with `margin` of room on every edge.
     ///
     /// - outline: pixels of dark hairline round the bot, for a bot that sits on a wallpaper beside the logo
     ///   queue's outlined marks. The picture grows by that much on every edge.
     /// - space: the colours of the display the frame is shown on; sRGB when it is not known.
     static func image(_ form: BotForm, motion: BotMotion, side: CGFloat, outline: Int = 0, space: CGColorSpace? = nil) -> CGImage? {
+        guard let context = bare(form, motion: motion, side: side, outline: outline, space: space) else { return nil }
+        if outline > 0 { BotHairline.lay(on: context, reach: outline) }
+        return context.makeImage()
+    }
+
+    /// The frame without its hairline, with `outline` pixels of room left for one on every edge, in the kept
+    /// bitmap the next frame is drawn in.
+    static func bare(_ form: BotForm, motion: BotMotion, side: CGFloat, outline: Int, space: CGColorSpace?) -> CGContext? {
         let inner = Int((side * (1 + 2 * margin)).rounded(.up)), extent = inner + outline * 2
-        guard inner > 0, let context = canvas(extent, space: space) else { return nil }
+        guard inner > 0, let context = BotCanvas.clear(extent, space: space) else { return nil }
         context.saveGState()
         // From here one unit is the mark's side, measured from its top left with y running down.
         let unit = CGFloat(inner) / (1 + 2 * margin)
@@ -75,59 +70,90 @@ enum BotRenderer {
             body(form, motion: motion, on: context)
         }
         context.restoreGState()
-        if outline > 0 { hairline(on: context, extent: extent, reach: outline) }
-        return context.makeImage()
-    }
-
-    /// Darkens the pixels just outside the bot, the way the queue's marks are outlined: the silhouette spread
-    /// by `reach`, hardened so a soft edge still gives a crisp line, and drawn behind the bot at half strength.
-    ///
-    /// The marks build theirs once, from masks. A bot is drawn again whenever it blinks, so its hairline comes
-    /// from the picture's own alpha instead, spread by Accelerate, which costs a fraction of drawing the bot.
-    private static func hairline(on context: CGContext, extent: Int, reach: Int) {
-        guard let data = context.data else { return }
-        let count = extent * extent, size = vImagePixelCount(extent), none = vImage_Flags(kvImageNoFlags)
-        let alpha = UnsafeMutablePointer<UInt8>.allocate(capacity: count), spread = UnsafeMutablePointer<UInt8>.allocate(capacity: count)
-        defer { alpha.deallocate(); spread.deallocate() }
-        var picture = vImage_Buffer(data: data, height: size, width: size, rowBytes: context.bytesPerRow)
-        var own = vImage_Buffer(data: alpha, height: size, width: size, rowBytes: extent)
-        var ring = vImage_Buffer(data: spread, height: size, width: size, rowBytes: extent)
-        let side = 2 * reach + 1, flat = [UInt8](repeating: 0, count: side * side)
-        // A frame's pixels are blue, green, red, alpha in memory: alpha is the fourth byte.
-        guard vImageExtractChannel_ARGB8888(&picture, &own, 3, none) == kvImageNoError,
-              vImageDilate_Planar8(&own, &ring, 0, 0, flat, vImagePixelCount(side), vImagePixelCount(side), none) == kvImageNoError
-        else { return }
-        let harder = (0..<256).map { UInt8(min(255, $0 * 3)) }
-        vImageTableLookUp_Planar8(&ring, &ring, harder, none)
-        guard let provider = CGDataProvider(data: Data(bytes: spread, count: count) as CFData),
-              let mask = CGImage(width: extent, height: extent, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: extent,
-                                 space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
-                                 provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
-        else { return }
-        let whole = CGRect(x: 0, y: 0, width: extent, height: extent)
-        context.saveGState()
-        context.setBlendMode(.destinationOver)
-        context.setAlpha(LogoImages.outlineOpacity)
-        context.clip(to: whole, mask: mask)
-        context.setFillColor(.black)
-        context.fill(whole)
-        context.restoreGState()
+        return context
     }
 
     // MARK: The morph
 
+    /// How far each part of a body has come through the morph. Worked out once a frame, so the still part kept
+    /// from an earlier frame and the part drawn over it follow the same curves.
+    private struct Morph {
+        /// How far the logo has turned into the bot, from 0 to 1.
+        let share: CGFloat
+        /// The share eased in and out: how far the outline has come and how far the body has settled.
+        let eased: CGFloat
+        /// The body's colour field, solid well before the outline has arrived.
+        let solid: CGFloat
+        /// What the body wears, which arrives with the eyes.
+        let dressed: CGFloat
+
+        init(_ share: CGFloat) {
+            self.share = share
+            eased = BotMotion.easeInOut(share)
+            solid = min(1, share / 0.22)
+            dressed = max(0, min(1, (share - 0.45) / 0.45))
+        }
+
+        /// The logo stays where it is; the bot it turns into may settle a little above or below it.
+        func settle(_ spec: BotSpec, on context: CGContext) {
+            context.translateBy(x: 0, y: spec.settle * eased)
+        }
+    }
+
+    /// A body's frame: its still part, kept from an earlier frame when nothing has moved it, then what moves
+    /// with the face.
     private static func body(_ form: BotForm, motion: BotMotion, on context: CGContext) {
-        let spec = form.spec, share = motion.morph, eased = BotMotion.easeInOut(share)
+        let spec = form.spec, morph = Morph(motion.morph), radius = spec.radius
+        // Everything drawn before a kept piece, or before a piece that rides with the face, moves with the morph
+        // and the turn alone. A bot that does not spin draws that part once and then only what its face changes.
+        let settled = spec.keeps == nil ? spec.decor.firstIndex { $0.followsFace } ?? spec.decor.count : 0
+        let still = BotStill(form: form, morph: morph.share, turn: motion.turn, on: context)
+        if !still.restore() {
+            context.saveGState()
+            stillPart(form, morph: morph, turn: motion.turn, decor: settled, on: context)
+            context.restoreGState()
+            still.keep()
+        }
+
+        morph.settle(spec, on: context)
+        if let kept = spec.keeps {
+            context.saveGState()
+            context.setAlpha(morph.solid)
+            context.translateBy(x: kept.midX, y: kept.midY - motion.kept.lift)
+            context.scaleBy(x: motion.kept.scale, y: motion.kept.scale)
+            context.translateBy(x: -kept.midX, y: -kept.midY)
+            context.clip(to: kept.insetBy(dx: -0.01, dy: -0.01))
+            draw(form.artwork, in: box, on: context)
+            context.restoreGState()
+        }
+
+        guard morph.dressed > 0 else { return }
+        let face = motion.face, turn = spec.reach * 0.72
+        let yaw = max(-1.15, min(1.15, face.look)) * turn, pitch = max(-1.15, min(1.15, face.lookY)) * turn
+        let glance = CGPoint(x: sin(yaw) * radius * 0.72, y: sin(pitch) * radius * 0.62)
+        if spec.keeps != nil {
+            wear(spec, outline: form.outline(eased: morph.eased, turn: motion.turn), strength: morph.dressed, on: context)
+        }
+        for item in spec.decor[settled...] {
+            decorate(item, spec: spec, offset: item.followsFace ? glance : .zero, strength: morph.dressed, on: context)
+        }
+        eyes(spec, face: face, yaw: yaw, pitch: pitch, awake: morph.dressed, on: context)
+    }
+
+    /// The part of a body that only the morph and the turn change: the logo fading out, the body and its
+    /// paint, a ring, and what it wears up to the first piece that moves with its face. `decor` counts the
+    /// pieces of `spec.decor` drawn here; a body with a kept piece draws none here, as that piece comes first.
+    private static func stillPart(_ form: BotForm, morph: Morph, turn: CGFloat, decor: Int, on context: CGContext) {
+        let spec = form.spec, share = morph.share, eased = morph.eased, solid = morph.solid, dressed = morph.dressed
         let center = spec.center, radius = spec.radius
         // The artwork fades into the colour field while the outline is still close to the logo's.
-        let artwork = 1 - min(1, share / 0.4), solid = min(1, share / 0.22)
+        let artwork = 1 - min(1, share / 0.4)
         if artwork > 0 {
             context.setAlpha(artwork)
             draw(form.artwork, in: box, on: context)
         }
-        // The logo stays where it is; the bot it turns into may settle a little above or below it.
-        context.translateBy(x: 0, y: spec.settle * eased)
-        let outline = outline(form, eased: eased, turn: motion.turn)
+        morph.settle(spec, on: context)
+        let outline = form.outline(eased: eased, turn: turn)
 
         // A ring goes on in two passes: all of it first, so the body covers the far side; then the near side
         // drawn across the body.
@@ -140,12 +166,6 @@ enum BotRenderer {
             context.addPath(ringPath(ring, spec: spec, grown: ringShare, nearSideOnly: false))
             context.strokePath()
         }
-
-        // What the body wears arrives with the eyes.
-        let dressed = max(0, min(1, (share - 0.45) / 0.45))
-        let face = motion.face, turn = spec.reach * 0.72
-        let yaw = max(-1.15, min(1.15, face.look)) * turn, pitch = max(-1.15, min(1.15, face.lookY)) * turn
-        let glance = CGPoint(x: sin(yaw) * radius * 0.72, y: sin(pitch) * radius * 0.62)
 
         // Feelers go on before the body, which then covers where they start.
         for item in spec.decor where dressed > 0 {
@@ -205,53 +225,43 @@ enum BotRenderer {
             context.restoreGState()
         }
 
-        if let kept = spec.keeps {
-            context.saveGState()
-            context.setAlpha(solid)
-            context.translateBy(x: kept.midX, y: kept.midY - motion.kept.lift)
-            context.scaleBy(x: motion.kept.scale, y: motion.kept.scale)
-            context.translateBy(x: -kept.midX, y: -kept.midY)
-            context.clip(to: kept.insetBy(dx: -0.01, dy: -0.01))
-            draw(form.artwork, in: box, on: context)
-            context.restoreGState()
-        }
-
-        guard dressed > 0 else { return }
+        guard spec.keeps == nil, dressed > 0 else { return }
         wear(spec, outline: outline, strength: dressed, on: context)
-        for item in spec.decor {
-            context.saveGState()
-            var follows = false
-            if case .blocks(_, _, let rides) = item { follows = rides }
-            context.translateBy(x: center.x + (follows ? glance.x : 0), y: center.y + (follows ? glance.y : 0))
-            context.scaleBy(x: radius, y: radius)
-            context.setAlpha(dressed)
-            switch item {
-            case .blocks(let rects, let paint, _):
-                context.setFillColor(color(paint))
-                context.fill(rects)
-            case .cut(let rects):
-                context.setBlendMode(.destinationOut)
-                context.setFillColor(.black)
-                context.fill(rects)
-            case .notch(let points):
-                context.setBlendMode(.destinationOut)
-                context.setFillColor(.black)
-                context.addLines(between: points)
-                context.closePath()
-                context.fillPath()
-            case .line(let points, let width):
-                context.setStrokeColor(ink)
-                context.setLineWidth(width)
-                context.setLineJoin(.round)
-                context.setLineCap(.round)
-                context.addLines(between: points)
-                context.strokePath()
-            case .soft, .feelers:
-                break
-            }
-            context.restoreGState()
+        for item in spec.decor.prefix(decor) { decorate(item, spec: spec, offset: .zero, strength: dressed, on: context) }
+    }
+
+    /// One piece a body wears over its outline, `offset` from where it sits on the body.
+    private static func decorate(_ item: BotSpec.Decor, spec: BotSpec, offset: CGPoint, strength: CGFloat,
+                                 on context: CGContext) {
+        context.saveGState()
+        context.translateBy(x: spec.center.x + offset.x, y: spec.center.y + offset.y)
+        context.scaleBy(x: spec.radius, y: spec.radius)
+        context.setAlpha(strength)
+        switch item {
+        case .blocks(let rects, let paint, _):
+            context.setFillColor(color(paint))
+            context.fill(rects)
+        case .cut(let rects):
+            context.setBlendMode(.destinationOut)
+            context.setFillColor(.black)
+            context.fill(rects)
+        case .notch(let points):
+            context.setBlendMode(.destinationOut)
+            context.setFillColor(.black)
+            context.addLines(between: points)
+            context.closePath()
+            context.fillPath()
+        case .line(let points, let width):
+            context.setStrokeColor(ink)
+            context.setLineWidth(width)
+            context.setLineJoin(.round)
+            context.setLineCap(.round)
+            context.addLines(between: points)
+            context.strokePath()
+        case .soft, .feelers:
+            break
         }
-        eyes(spec, face: face, yaw: yaw, pitch: pitch, awake: dressed, on: context)
+        context.restoreGState()
     }
 
     /// The soft pieces a body wears, kept to its outline: a fringe, a scarf. Sizes are in body radii from
@@ -273,24 +283,6 @@ enum BotRenderer {
             context.fillPath()
             context.restoreGState()
         }
-    }
-
-    /// The outline at one moment of the morph: the logo's reach blended, angle by angle, with the body's.
-    private static func outline(_ form: BotForm, eased: CGFloat, turn: CGFloat) -> CGPath {
-        let path = CGMutablePath(), count = BotForm.samples, center = form.spec.center
-        for index in 0..<count {
-            let angle = CGFloat(index) * 2 * .pi / CGFloat(count)
-            // The body turns under the face, so its reach is read `turn` degrees back.
-            var from = (CGFloat(index) - turn).truncatingRemainder(dividingBy: CGFloat(count))
-            if from < 0 { from += CGFloat(count) }
-            let low = Int(from) % count, part = from - CGFloat(Int(from))
-            let body = form.bodyReach[low] + (form.bodyReach[(low + 1) % count] - form.bodyReach[low]) * part
-            let reach = form.logoReach[index] + (body - form.logoReach[index]) * eased
-            let point = CGPoint(x: center.x + cos(angle) * reach, y: center.y + sin(angle) * reach)
-            if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
-        }
-        path.closeSubpath()
-        return path
     }
 
     private static func ringPath(_ ring: BotSpec.Ring, spec: BotSpec, grown: CGFloat, nearSideOnly: Bool) -> CGPath {

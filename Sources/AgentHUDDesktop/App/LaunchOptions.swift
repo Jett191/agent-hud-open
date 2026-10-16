@@ -19,6 +19,9 @@ public struct DesktopLaunchOptions: Equatable {
     public var demoScript: String?
     /// `--demo-clock <ISO 8601 time>`: the moment the demo starts at, in place of now (`DemoClock`, which reads it).
     public var demoClock: String?
+    /// `--demo-tools`: a demo serves the MCP tool channel, whatever Settings → Experimental says, so an agent can
+    /// arrange the panel on the sample. Nothing without `--demo`: every other launch serves it while that switch is on.
+    public var demoTools = false
     /// `--record <file.mov>`: record the HUD's own windows on the main display to a movie with a transparent
     /// background. `--record-seconds <n>` stops and quits after that long, `--record-fps <n>` sets the frame rate
     /// (60) and `--record-region <x,y,width,height>` limits the picture to part of the display, in points from
@@ -52,6 +55,7 @@ public struct DesktopLaunchOptions: Equatable {
             case "--demo-clock":
                 options.demo = true
                 options.demoClock = iterator.next()
+            case "--demo-tools": options.demoTools = true
             case "--record": options.recordPath = iterator.next()
             case "--record-seconds": options.recordSeconds = iterator.next().flatMap(Double.init)
             case "--record-fps": options.recordFPS = iterator.next().flatMap(Int.init)
@@ -62,6 +66,13 @@ public struct DesktopLaunchOptions: Equatable {
             }
         }
         return options
+    }
+
+    /// When the launch answers MCP tool calls on `mcp.sock`. A demo shares the data directory with the real copy and
+    /// one process serves the socket, so a demo serves it only when `--demo-tools` asks, and then always.
+    var toolChannel: AgentToolsChannel.Mode {
+        guard demo else { return .whileSwitchedOn }
+        return demoTools ? .always : .never
     }
 
     private static func language(from value: String) -> AppLanguage? {

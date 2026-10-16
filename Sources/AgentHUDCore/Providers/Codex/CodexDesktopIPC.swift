@@ -12,7 +12,7 @@ public final class CodexDesktopIPC {
     }
 
     private let descriptor: Int32
-    private let deadline: TimeInterval
+    private var deadline: TimeInterval
     /// A snapshot carries the thread's whole history: tens of megabytes for a long thread.
     private let maximumFrame = 64 * 1024 * 1024
 
@@ -116,10 +116,40 @@ public final class CodexDesktopIPC {
         }
     }
 
-    private func follow(_ value: Bool, source: String, owner: String, threadID: String) throws {
+    /// Tells a thread's owner that this client follows it, or no longer does. A follower is sent the thread's whole
+    /// state and then each change to it; following again while following asks for the whole state once more.
+    public func follow(_ value: Bool, source: String, owner: String, threadID: String) throws {
         try send(["type": "broadcast", "method": "thread-stream-following-changed", "version": 1,
                   "sourceClientId": source, "targetClientIds": [owner],
                   "params": ["hostId": "local", "conversationId": threadID, "following": value]])
+    }
+
+    // MARK: A connection that stays open
+
+    /// Gives the waits that follow their own time: a connection kept open has no one deadline for its whole life.
+    public func renew(timeout: TimeInterval) { deadline = ProcessInfo.processInfo.systemUptime + timeout }
+
+    /// Whether a message began to arrive within `seconds`. A closed connection throws.
+    public func waitForMessage(_ seconds: TimeInterval) throws -> Bool {
+        while true {
+            var entry = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+            let result = poll(&entry, 1, Int32(max(0, min(seconds * 1000, Double(Int32.max)))))
+            if result < 0, errno == EINTR { continue }
+            if result == 0 { return false }
+            guard result > 0, entry.revents & Int16(POLLIN) != 0 else { throw Failure.unavailable }
+            return true
+        }
+    }
+
+    /// The next message as its bytes, of at most `limit`, within the connection's current time.
+    public func message(limit: Int) throws -> Data { try receiveFrame(limit: limit) }
+
+    /// Sends a message without waiting for anything back; its answer, if it has one, arrives among the messages.
+    public func post(_ message: [String: Any]) throws { try send(message) }
+
+    /// Says that this client cannot take a request Desktop's hub offered to every client, when `message` is one.
+    public func declines(_ message: JSONValue) throws -> Bool {
+        try answerDiscovery(type: message["type"].stringValue, requestID: message["requestId"].stringValue)
     }
 
     private func answerDiscovery(_ message: [String: Any]) throws -> Bool {
@@ -158,15 +188,22 @@ public final class CodexDesktopIPC {
         return message
     }
 
-    private func receiveFrame() throws -> Data {
+    private func receiveFrame(limit: Int? = nil) throws -> Data {
         let header = try read(4)
         let length = header.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self)) }
-        guard length > 0, length <= maximumFrame else { throw Failure.protocolError }
+        guard length > 0, length <= limit ?? maximumFrame else { throw Failure.protocolError }
         return try read(Int(length))
     }
 
+    /// A message this long is read into memory mapped for it alone.
+    private static let mappedFrom = 1024 * 1024
+
     private func read(_ count: Int) throws -> Data {
+        // A long thread's state is a hundred megabytes in one message. Memory the allocator frees after such a message
+        // stays counted as this process's (110 MB measured after one of 108 MB); a mapping goes back as it is released.
+        if count >= Self.mappedFrom { return try readMapped(count) }
         var result = Data()
+        result.reserveCapacity(count)
         while result.count < count {
             try wait(for: Int16(POLLIN))
             var bytes = [UInt8](repeating: 0, count: min(count - result.count, 64 * 1024))
@@ -176,6 +213,26 @@ public final class CodexDesktopIPC {
             result.append(contentsOf: bytes.prefix(size))
         }
         return result
+    }
+
+    private func readMapped(_ count: Int) throws -> Data {
+        guard let memory = mmap(nil, count, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0), memory != MAP_FAILED else {
+            throw Failure.unavailable
+        }
+        var filled = 0
+        do {
+            while filled < count {
+                try wait(for: Int16(POLLIN))
+                let size = recv(descriptor, memory + filled, min(count - filled, 1024 * 1024), 0)
+                if size < 0, errno == EINTR || errno == EAGAIN { continue }
+                guard size > 0 else { throw Failure.unavailable }
+                filled += size
+            }
+        } catch {
+            munmap(memory, count)
+            throw error
+        }
+        return Data(bytesNoCopy: memory, count: count, deallocator: .unmap)
     }
 
     private func wait(for events: Int16) throws {

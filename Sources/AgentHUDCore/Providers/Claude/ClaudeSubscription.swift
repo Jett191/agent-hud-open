@@ -1,6 +1,6 @@
 import Foundation
 
-/// The engine reports only "max" through get_usage; its account profile supplies the specific tier and the account.
+/// The account profile supplies the plan, its specific tier and the account; the engine's own plan is the fallback.
 enum ClaudeSubscription {
     /// `CLAUDE_CONFIG_DIR`, when it is set.
     static func configDirectory(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> URL? {
@@ -25,15 +25,24 @@ enum ClaudeSubscription {
         return ClientHome.key(directory(home: home), defaultDirectory: home.appendingPathComponent(".claude", isDirectory: true))
     }
 
+    /// The engine reports the plan stored with the login at sign-in, which stays behind after an upgrade or downgrade
+    /// until the next `/login`; Claude Code rewrites the profile's organization on every start. The engine still decides
+    /// whether there is a subscription at all: an API-key or third-party login can leave an old profile behind.
     static func plan(type: String?, profileData: Data?) -> String? {
-        guard type == "max", let account = profileData.flatMap(decode), account.organizationType == "claude_max"
-        else { return type }
+        guard let type else { return nil }
+        let account = profileData.flatMap(decode)
+        let plan = account?.organizationType.flatMap { organizationPlans[$0] } ?? type
+        guard plan == "max", let account, account.organizationType == "claude_max" else { return plan }
         switch account.userRateLimitTier ?? account.organizationRateLimitTier {
         case "default_claude_max_5x": return "max_5x"
         case "default_claude_max_20x": return "max_20x"
-        default: return type
+        default: return plan
         }
     }
+
+    /// Claude Code's own names for the organization types it knows.
+    private static let organizationPlans = ["claude_max": "max", "claude_pro": "pro", "claude_team": "team",
+                                            "claude_enterprise": "enterprise"]
 
     /// Claude Code itself treats the account and organization UUID pair as the login identity.
     static func identity(profileData: Data?) -> Identity? {

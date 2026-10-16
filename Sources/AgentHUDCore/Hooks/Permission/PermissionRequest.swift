@@ -8,6 +8,9 @@ public struct PermissionRequest: Identifiable, Equatable, Sendable {
     /// Native requests carry their own scopes or active turn rather than a tool-hook permission rule.
     public enum NativeApproval: Equatable, Sendable {
         case computerUseApp(persist: [String])
+        /// The browser asking for a website, with the scopes its answer can be kept for: none for an answer that is
+        /// not kept beyond what the browser itself keeps.
+        case browserAccess(origin: String?, persist: [String])
         case asynchronousQuestion(turnID: String)
     }
 
@@ -80,6 +83,7 @@ public struct PermissionRequest: Identifiable, Equatable, Sendable {
     public var badge: String {
         if isQuestion { return "ASK" }
         if case .computerUseApp = nativeApproval { return "APP" }
+        if case .browserAccess = nativeApproval { return "WEB" }
         guard let toolName, !toolName.isEmpty else { return "TOOL" }
         if toolName.hasPrefix("mcp__") { return "MCP" }
         switch Self.kind(toolName) {
@@ -100,6 +104,7 @@ public struct PermissionRequest: Identifiable, Equatable, Sendable {
     public var symbol: String {
         if isQuestion { return "questionmark.bubble.fill" }
         if case .computerUseApp = nativeApproval { return "desktopcomputer" }
+        if case .browserAccess = nativeApproval { return "globe" }
         guard let toolName, !toolName.isEmpty else { return "questionmark.circle" }
         if toolName.hasPrefix("mcp__") { return "puzzlepiece.extension.fill" }
         switch Self.kind(toolName) {
@@ -129,8 +134,10 @@ public struct PermissionRequest: Identifiable, Equatable, Sendable {
     /// quietly does nothing unless the session was started to allow it.
     /// A rule that cannot be read back is not offered: what it would allow is not something to agree to unseen.
     public var alwaysAllow: JSONValue? {
-        if case .computerUseApp(let persist) = nativeApproval {
+        switch nativeApproval {
+        case .computerUseApp(let persist), .browserAccess(_, let persist):
             return persist.contains("always") ? .object(["persist": .string("always")]) : nil
+        case .asynchronousQuestion, nil: break
         }
         guard source.supportsPermissionUpdates else { return nil }
         return suggestions.first {
@@ -139,10 +146,19 @@ public struct PermissionRequest: Identifiable, Equatable, Sendable {
     }
 
     /// What always allowing adds, written the way the client's settings hold a rule, such as `Bash(npm test:*)`.
-    public var alwaysAllowRule: String? { alwaysAllow.flatMap(Self.rules) }
+    public var alwaysAllowRule: String? {
+        // For a website, always allowing adds the site itself to the browser's allowed ones.
+        if case .browserAccess(let origin, _) = nativeApproval { return alwaysAllow == nil ? nil : origin }
+        return alwaysAllow.flatMap(Self.rules)
+    }
 
     public var allowLabel: String {
-        nativeApproval == nil ? L10n.text("批准一次", "Allow once") : L10n.text("允许此对话", "Allow this conversation")
+        switch nativeApproval {
+        case nil: return L10n.text("批准一次", "Allow once")
+        // A website's answer is kept for the conversation only when the request offers that.
+        case .browserAccess(_, let persist) where !persist.contains("session"): return L10n.text("批准一次", "Allow once")
+        default: return L10n.text("允许此对话", "Allow this conversation")
+        }
     }
 
     /// The rules a suggestion adds, in the client's own notation and order; nil unless every one names its tool.

@@ -73,7 +73,8 @@ enum HarnessLogs: TailLog {
         try await DeepSeekLogReader.read(url, from: start)
     }
 
-    static func ingest(_ lines: Data, into transcript: inout DeepSeekTranscript) throws -> [UsageLedger.Event] {
+    /// A Harness log is read from its start, so its attempts keep their order as keys.
+    static func ingest(_ lines: Data, at offset: Int, into transcript: inout DeepSeekTranscript) throws -> [UsageLedger.Event] {
         for line in lines.split(separator: 0x0A) { try transcript.ingest(line) }
         return transcript.drainUsage()
     }

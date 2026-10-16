@@ -9,9 +9,10 @@ import SwiftUI
 /// appearance, the pointer, and the rule that an alert belongs on the screen the pointer is on.
 @MainActor
 final class IslandController {
-    static let expandedWidth: CGFloat = 540
-    /// One agent's own panel, on a dock that separates its agents.
-    static let agentPanelWidth: CGFloat = 440
+    /// The whole panel's width where its layout gives none; a layout sets it from 480 to 720 (`PanelStyle.panelWidth`).
+    static let expandedWidth = CGFloat(PanelStyle.defaultWidth)
+    /// One agent's own panel, on a dock that separates its agents, at the default width (`PanelStyle.agentPanelWidth`).
+    static let agentPanelWidth = CGFloat(PanelStyle().agentPanelWidth)
     static let defaultPanelHeight: CGFloat = 326
     static let expandedRadius: CGFloat = 26
     static let alertWingWidth: CGFloat = 112
@@ -70,11 +71,30 @@ final class IslandController {
         let appearance: GlowAppearance
         let settings: AgentHUDCore.Settings
         let agents: [AgentDescriptor]
+        /// The agents each screen's layout lists for its resting HUD, by screen key, a draft included: a change
+        /// re-applies that screen's closed HUD at once.
+        let hudAgents: [String: [String]]
+        /// Each screen's style draft, by screen key, with the glow it draws, which a draft that brings a version back
+        /// draws whole: a change re-applies that screen's HUD at once, on the path a person's change in Settings takes,
+        /// a change of mode or edge included.
+        let styles: [String: HUDStyle]
+        let draftedGlows: [String: GlowSettings]
+        /// The panel's width in each screen's layout, by screen key, a draft included: a change resizes an open panel.
+        let widths: [String: Int]
     }
 
     private var inputs: Inputs {
-        Inputs(rows: store.rows, sessions: store.sessions, isPaused: store.isPaused, glowHidden: store.glowHidden,
-               appearance: store.glowAppearance(light: systemIsLight), settings: settings.settings, agents: settings.agents)
+        let layout = settings.panelLayout
+        return Inputs(rows: store.rows, sessions: store.sessions, isPaused: store.isPaused, glowHidden: store.glowHidden,
+                      appearance: store.glowAppearance(light: systemIsLight), settings: settings.settings, agents: settings.agents,
+                      hudAgents: Dictionary(order.map { ($0, layout.effective(for: $0).hud.agents) },
+                                            uniquingKeysWith: { first, _ in first }),
+                      styles: Dictionary(order.compactMap { key in layout.styleDraft(of: key).map { (key, $0) } },
+                                         uniquingKeysWith: { first, _ in first }),
+                      draftedGlows: Dictionary(order.filter { layout.hasStyleDraft($0) }.map { ($0, settings.effectiveGlow(on: $0)) },
+                                               uniquingKeysWith: { first, _ in first }),
+                      widths: Dictionary(order.map { ($0, layout.effective(for: $0).style.panelWidth) },
+                                         uniquingKeysWith: { first, _ in first }))
     }
 
     // MARK: Screens
@@ -130,6 +150,28 @@ final class IslandController {
     /// The HUD the tests and the menu act on when no screen is named: the main display's.
     var primary: ScreenHUD? {
         NSScreen.main.map { ScreenIdentity.key(for: $0) }.flatMap { huds[$0] } ?? order.first.flatMap { huds[$0] }
+    }
+
+    /// The attached displays as the MCP tools tell an agent of them, in the system's order: by role, with how each
+    /// presents the HUD now, a style draft included, and the agents its resting HUD would show now in each mode.
+    var panelScreens: [PanelScreen] {
+        NSScreen.screens.enumerated().map { index, screen in
+            let placement = ScreenIdentity.placement(for: screen, in: settings)
+            var others: [HUDMode: [String]] = [:]
+            for mode in HUDMode.allCases where mode != placement.mode {
+                others[mode] = ScreenAgents.available(store: store, mode: mode)
+            }
+            return PanelScreen(key: ScreenIdentity.key(for: screen), name: ScreenIdentity.role(of: screen, at: index),
+                               mode: placement.mode, edge: placement.mode.isDocked ? placement.edge : .top,
+                               hasNotch: ScreenIdentity.hasNotch(screen),
+                               agents: ScreenAgents.available(store: store, mode: placement.mode), otherModes: others)
+        }
+    }
+
+    /// How the display of `key` draws the whole panel, for a picture or a measurement made off screen: the main
+    /// display's for the shared layout and for a screen that is not attached.
+    func panelDisplay(for key: String?) -> PanelPictureRenderer.Display {
+        (key.flatMap { huds[$0] } ?? primary)?.panelDisplay ?? .main
     }
 
     /// The HUD on the screen the pointer is on, which is where an alert belongs and which hover acts on.

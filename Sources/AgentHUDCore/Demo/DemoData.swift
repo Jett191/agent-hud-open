@@ -251,6 +251,19 @@ public enum DemoData {
         Dictionary(uniqueKeysWithValues: plans.map { ($0.id, usage(of: $0, now: now)) })
     }
 
+    /// What the sessions' turns sent again after the cache lapsed, as the ledger reports it: in the period of the turn,
+    /// on the session's model.
+    public static func recached(now: Date) -> [UsageBucket] {
+        plans.flatMap { plan in
+            usage(of: plan, now: now).turns.compactMap { turn -> UsageBucket? in
+                guard let sent = turn.recachedTokens else { return nil }
+                let start = Date(timeIntervalSince1970: (turn.start.timeIntervalSince1970 / UsageBucket.duration).rounded(.down) * UsageBucket.duration)
+                return UsageBucket(start: start, agentId: plan.agentId, tokensIn: sent, tokensOut: 0,
+                                   cacheWriteTokens: turn.tokens.cacheWriteTokens > 0 ? sent : 0)
+            }
+        }
+    }
+
     private static func tokens(_ kinds: TokenKinds) -> SessionUsage.Tokens {
         SessionUsage.Tokens(tokensIn: kinds.input + kinds.cacheWrite, tokensOut: kinds.output + kinds.reasoning,
                             cacheReadTokens: kinds.cacheRead, cacheWriteTokens: kinds.cacheWrite, reasoningTokens: kinds.reasoning)

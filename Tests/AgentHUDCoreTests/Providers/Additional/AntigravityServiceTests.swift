@@ -34,7 +34,7 @@ final class AntigravityServiceTests: XCTestCase, @unchecked Sendable {
 
     func testNativeDiscoveryIncludesEveryCredentialBearingService() async throws {
         let processes = processes(7)
-        let endpoints = try await AntigravityService.permissionEndpoints { executable, arguments in
+        let endpoints = try await AntigravityService.permissionEndpoints(isPresent: { true }) { executable, arguments in
             if executable == "/bin/ps" { return processes }
             let index = try XCTUnwrap(arguments.firstIndex(of: "-p"))
             let pid = try XCTUnwrap(Int(arguments[index + 1]))
@@ -47,7 +47,7 @@ final class AntigravityServiceTests: XCTestCase, @unchecked Sendable {
         enum Failure: Error { case inspection }
         let processes = processes(7)
         do {
-            _ = try await AntigravityService.permissionEndpoints { executable, arguments in
+            _ = try await AntigravityService.permissionEndpoints(isPresent: { true }) { executable, arguments in
                 if executable == "/bin/ps" { return processes }
                 if arguments.contains("7") { throw Failure.inspection }
                 return "n127.0.0.1:50001"
@@ -58,7 +58,7 @@ final class AntigravityServiceTests: XCTestCase, @unchecked Sendable {
 
     func testUnauthenticatedCLIListenersDoNotBlockSupportedNativeServices() async throws {
         let processes = processes(1) + "\n2 /usr/local/bin/agy --prompt-interactive fixture"
-        let endpoints = try await AntigravityService.permissionEndpoints { executable, arguments in
+        let endpoints = try await AntigravityService.permissionEndpoints(isPresent: { true }) { executable, arguments in
             if executable == "/bin/ps" { return processes }
             XCTAssertFalse(arguments.contains("2"), "a CLI without discoverable credentials cannot authenticate this native API")
             return "n127.0.0.1:50001"
@@ -69,10 +69,44 @@ final class AntigravityServiceTests: XCTestCase, @unchecked Sendable {
     func testAnAuthenticatedServiceWithoutDiscoverableListenersIsUnknown() async {
         let processes = processes(1)
         do {
-            _ = try await AntigravityService.permissionEndpoints { executable, _ in
+            _ = try await AntigravityService.permissionEndpoints(isPresent: { true }) { executable, _ in
                 executable == "/bin/ps" ? processes : ""
             }
             XCTFail("a failed listener discovery must not settle an existing prompt")
         } catch { XCTAssertEqual(error.localizedDescription, ProviderFailure.format.localizedDescription) }
+    }
+
+    func testAMacWithoutAntigravityListsNoProcesses() async throws {
+        let inspect: @Sendable (String, [String]) async throws -> String = { executable, _ in
+            XCTFail("with nothing to look for, \(executable) must not run")
+            return self.processes(1)
+        }
+        let running = try await AntigravityService.running(isPresent: { false }, inspect: inspect)
+        let endpoints = try await AntigravityService.permissionEndpoints(isPresent: { false }, inspect: inspect)
+        XCTAssertTrue(running.isEmpty)
+        XCTAssertTrue(endpoints.isEmpty)
+    }
+
+    func testPresenceFollowsEachAppAndDataFolder() throws {
+        let files = FileManager.default
+        let root = files.temporaryDirectory.appendingPathComponent("antigravity-presence-\(UUID().uuidString)", isDirectory: true)
+        defer { try? files.removeItem(at: root) }
+        let home = root.appendingPathComponent("home"), applications = root.appendingPathComponent("Applications")
+        try files.createDirectory(at: home, withIntermediateDirectories: true)
+        try files.createDirectory(at: applications, withIntermediateDirectories: true)
+        XCTAssertFalse(AntigravityService.isPresent(home: home, environment: [:], applications: applications))
+        let places = [".gemini/antigravity", ".gemini/antigravity-cli", ".gemini/antigravity-ide", "Applications/Antigravity.app",
+                      "Applications/Antigravity IDE.app"].map { home.appendingPathComponent($0) }
+            + ["Antigravity.app", "Antigravity IDE.app"].map { applications.appendingPathComponent($0) }
+        for place in places {
+            try files.createDirectory(at: place, withIntermediateDirectories: true)
+            XCTAssertTrue(AntigravityService.isPresent(home: home, environment: [:], applications: applications), place.path)
+            try files.removeItem(at: place)
+        }
+        // agy keeps its conversations in GEMINI_CLI_HOME when that is set.
+        let moved = root.appendingPathComponent("gemini")
+        try files.createDirectory(at: moved.appendingPathComponent("antigravity-cli/conversations"), withIntermediateDirectories: true)
+        XCTAssertFalse(AntigravityService.isPresent(home: home, environment: [:], applications: applications))
+        XCTAssertTrue(AntigravityService.isPresent(home: home, environment: ["GEMINI_CLI_HOME": moved.path], applications: applications))
     }
 }

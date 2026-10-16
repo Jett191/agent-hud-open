@@ -117,9 +117,12 @@ public enum AttentionHooks {
     /// The configuration with Agent HUD's handlers taken out, or with `command` when it is given: in the first handler
     /// already there, or in a group of its own.
     static func updating(_ configuration: [String: ProviderJSON], source: Source, command: String?) throws -> [String: ProviderJSON] {
-        try ClaudeStyleHooks.updating(configuration, event: source.event, owns: { ownsCommand($0, source: source) }, command: command) { command in
+        // That the client needs the user is a report: the client goes on asking in its own window without waiting for it.
+        try ClaudeStyleHooks.updating(configuration, event: source.event, owns: { ownsCommand($0, source: source) }, command: command,
+                                      fixed: ClaudeStyleHooks.reporting) { command in
             .object(["matcher": .string(source.matcher),
-                     "hooks": .array([.object(["type": .string("command"), "command": .string(command), "timeout": .integer(5)])])])
+                     "hooks": .array([.object(ClaudeStyleHooks.reporting.merging(["type": .string("command"), "command": .string(command),
+                                                                                  "timeout": .integer(5)]) { $1 })])])
         }
     }
 }

@@ -363,6 +363,29 @@ final class GrokBotUsageTests: XCTestCase {
         XCTAssertTrue(report.sessions.contains { $0.id == "cursor-account:billing-account:sand-subagent-run-b" && $0.isBillingOnlyGrokBotSubagent })
     }
 
+    func testAListedBotKeepsItsOlderRunsWhileAnOldRunNoBotClaimsLeavesTheMonth() async throws {
+        let fixture = try GrokBotCacheFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        _ = try fixture.writeRoster()
+        let bot = try GrokBotSessions.read(fixture.roster)
+        // Billed ten days ago, outside the week sessions are listed for, under a bot active a minute ago.
+        let billing = try CursorClient.parseEvents([
+            row(conversation: fixture.agent, at: -50),
+            row(conversation: "sand-subagent-run-a", model: "grok-bot-automation", at: -10 * 86400),
+            row(conversation: "sand-subagent-unexplained", at: -10 * 86400),
+        ], account: "billing-account")
+        let now = now, agent = fixture.agent
+        let runs = GrokBotRoutineRuns(directory: fixture.directory, clock: { now })
+        await runs.refresh(billed: billing.sessions.map(\.id)) { _ in
+            GrokBotRoutineRunsTests.reply([(agent, #"{"id":"daily","runs":[{"id":"run-a"}]}"#)])
+        }
+        let report = try await combined(bot: bot, billing: billing, routineRuns: runs)
+            .fetchAccountAndLocalUsage(agents: [], historyHours: 31 * 24 + 25)
+        XCTAssertEqual(report.sessions.map(\.id), [fixture.sessionID], "a billed sub-agent no bot claims leaves with its week")
+        XCTAssertEqual(report.sessions.first?.subagentSessions?.map(\.id), ["cursor-account:billing-account:sand-subagent-run-a"],
+                       "the listed bot keeps its whole tree")
+    }
+
     private func metadata(agent: String, account: String = "bot-account") -> ProviderSessions {
         var session = ProviderSession(id: GrokBotCache.sessionID(account: account, agent: agent), title: "Native title", client: "Grok Bot")
         session.startedAt = now.addingTimeInterval(-60)

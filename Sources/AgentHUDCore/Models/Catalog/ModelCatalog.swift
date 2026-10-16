@@ -34,7 +34,13 @@ public enum ModelCatalog {
         /// Ascending by `from`.
         public let tiers: [Tier]
 
-        public func rates(prompt: Int) -> Rates { tiers.last { prompt >= $0.from }?.rates ?? rates }
+        public func rates(prompt: Int) -> Rates { rates(tier: tier(prompt: prompt)) }
+
+        /// The tier a prompt of `prompt` tokens reaches, as an index into `tiers`; nil below the first.
+        func tier(prompt: Int) -> Int? { tiers.lastIndex { prompt >= $0.from } }
+
+        /// The rates of a tier `tier(prompt:)` found.
+        func rates(tier: Int?) -> Rates { tier.map { tiers[$0].rates } ?? rates }
     }
 
     public struct Model: Hashable, Sendable {
@@ -143,9 +149,30 @@ public enum ModelCatalog {
     /// its prompt reaches, and at DeepSeek's peak rates when made in Beijing working hours. nil when the model has no
     /// price there.
     public static func cost(agentId: String, kinds: TokenKinds, region: Region = .international, at date: Date? = nil) -> Cost? {
+        guard let listing = listing(for: agentId, in: region) else { return nil }
+        return cost(kinds, tier: listing.tier(of: kinds), on: listing, at: date)
+    }
+
+    /// A consumer's model and the list its calls are priced by on one platform, looked up once for any number of calls.
+    struct Listing {
+        let model: Model
+        let price: Price
+        let region: Region
+
+        /// The tier a call's prompt reaches: its input, cache writes and cache reads.
+        func tier(of call: TokenKinds) -> Int? { price.tier(prompt: call.input + call.cacheWrite + call.cacheRead) }
+    }
+
+    /// The list a consumer's calls are priced by on `region`; nil when its model has no price there.
+    static func listing(for agentId: String, in region: Region = .international) -> Listing? {
         guard let model = model(for: agentId), let list = model.price(in: region) else { return nil }
-        let rates = list.price.rates(prompt: kinds.input + kinds.cacheWrite + kinds.cacheRead)
-        return Cost(amount: amount(kinds, at: rates) * factor(model, at: date), currency: list.region.currency)
+        return Listing(model: model, price: list.price, region: list.region)
+    }
+
+    /// What calls whose prompts reach the same `tier` would cost together, all made at `date`: what each would cost on
+    /// its own, added up, since every rate is per token.
+    static func cost(_ kinds: TokenKinds, tier: Int?, on listing: Listing, at date: Date? = nil) -> Cost {
+        Cost(amount: amount(kinds, at: listing.price.rates(tier: tier)) * factor(listing.model, at: date), currency: listing.region.currency)
     }
 
     /// What calls counted together would cost. A sum says nothing of any one call's prompt, so it is priced at the base

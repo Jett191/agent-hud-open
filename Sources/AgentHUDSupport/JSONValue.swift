@@ -42,6 +42,21 @@ public enum JSONValue: Codable, Equatable, Sendable {
         return try parsed ?? JSONDecoder().decode(Self.self, from: data)
     }
 
+    /// Reads JSON text as `parse` does, leaving out every string value longer than `limit` bytes as written: it reads as
+    /// `null`, and its bytes are passed over without being copied or checked. A reader of a state that carries
+    /// screenshots and page dumps beside the few fields it wants reads the fields at the cost of finding where each
+    /// long string ends. Keys are read whole, and text the parser does not take throws rather than going to
+    /// `JSONDecoder`, which could only read it whole.
+    public static func parse(_ data: Data, leavingOutStringsOver limit: Int) throws -> Self {
+        try data.withUnsafeBytes { buffer in
+            var parser = JSONParser(bytes: buffer.bindMemory(to: UInt8.self), stringLimit: limit)
+            let value = try parser.value(depth: 0)
+            parser.skipSpace()
+            guard parser.index == parser.bytes.count else { throw JSONParser.Malformed() }
+            return value
+        }
+    }
+
     public static func from<T: Encodable>(_ value: T) throws -> Self {
         try parse(RecordCoding.encoder().encode(value))
     }
@@ -59,6 +74,8 @@ private struct JSONParser {
     struct Malformed: Error {}
 
     let bytes: UnsafeBufferPointer<UInt8>
+    /// A string value longer than this many bytes as written is passed over and read as null; nil reads every string.
+    var stringLimit: Int?
     var index = 0
 
     mutating func skipSpace() {
@@ -104,7 +121,12 @@ private struct JSONParser {
                 index += 1
                 return .array(array)
             }
-        case UInt8(ascii: "\""): return .string(try string())
+        case UInt8(ascii: "\""):
+            if let stringLimit, let close = closingQuote(), close - index - 1 > stringLimit {
+                index = close + 1
+                return .null
+            }
+            return .string(try string())
         case UInt8(ascii: "t"): try literal("true"); return .bool(true)
         case UInt8(ascii: "f"): try literal("false"); return .bool(false)
         case UInt8(ascii: "n"): try literal("null"); return .null
@@ -116,6 +138,21 @@ private struct JSONParser {
         let count = word.utf8CodeUnitCount
         guard bytes.count - index >= count, memcmp(bytes.baseAddress! + index, word.utf8Start, count) == 0 else { throw Malformed() }
         index += count
+    }
+
+    /// Where the string starting at the opening quote closes, found by the quotes alone: one after an odd run of
+    /// backslashes is part of the text.
+    func closingQuote() -> Int? {
+        guard let base = bytes.baseAddress else { return nil }
+        var from = index + 1
+        while from < bytes.count, let found = memchr(base + from, 0x22, bytes.count - from) {
+            let quote = base.distance(to: found.assumingMemoryBound(to: UInt8.self))
+            var slashes = 0
+            while quote - slashes > index + 1, bytes[quote - slashes - 1] == UInt8(ascii: "\\") { slashes += 1 }
+            if slashes % 2 == 0 { return quote }
+            from = quote + 1
+        }
+        return nil
     }
 
     /// The string starting at the opening quote.

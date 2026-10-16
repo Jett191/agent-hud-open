@@ -12,7 +12,7 @@ public actor DeepSeekUsageProvider: UsageProvider, LedgerRecording {
     private var lastBalance: (at: Date, result: Result<DeepSeekBalance?, UsageProviderError>)?
     /// When each currency's balance runs out, as of the last reading.
     private var runsOut: [String: Date] = [:]
-    private var lastProcessStarts: (at: Date, starts: [Date])?
+    private var lastProcessCheck: (at: Date, starts: [Date])?
 
     public init(directory: URL, transcripts: DeepSeekTranscriptStore,
                 readBalance: @escaping @Sendable () async throws -> DeepSeekBalance? = { nil },
@@ -64,7 +64,12 @@ public actor DeepSeekUsageProvider: UsageProvider, LedgerRecording {
         let now = clock(), weekAgo = now.addingTimeInterval(-7 * 86400)
         let cutoff = min(weekAgo, now.addingTimeInterval(-Double(historyHours) * 3600))
         let indexed = await transcripts.index(since: cutoff)
-        let processStarts = await processStarts(for: indexed.sessions, now: now)
+        // Tokens and models come from every log of `historyHours`; sessions only from those active in the session window.
+        let sessionStart = SessionWindow.start(at: now)
+        let recent = indexed.sessions.filter {
+            ($0.transcript.lastActivityAt ?? $0.transcript.startedAt ?? $0.modifiedAt) >= sessionStart
+        }
+        let processCheck = await processCheck(for: recent, now: now)
         let balance: DeepSeekBalance?, balanceAt: Date?, balanceNotice: String?
         switch lastBalance?.result {
         case .success(let value): (balance, balanceAt, balanceNotice) = (value, value == nil ? nil : lastBalance?.at, nil)
@@ -75,17 +80,18 @@ public actor DeepSeekUsageProvider: UsageProvider, LedgerRecording {
         let models = Set(indexed.sessions.flatMap { [$0.transcript.model] + $0.transcript.models }).sorted()
         let consumers = models.map { AgentDescriptor(id: "deepseek-model:\($0)", vendor: "DeepSeek", model: ModelCatalog.consumerName(of: "deepseek-model:\($0)"),
                                                      source: L10n.sourceDeepSeekSessions, enabled: true) }
-        let sessions = indexed.sessions.filter { !$0.transcript.isSubagent }.map { session in
+        let sessions = recent.filter { !$0.transcript.isSubagent }.map { session in
             let t = session.transcript
+            let evidence = t.evidence(processStarts: processCheck?.starts, checkedAt: processCheck?.at)
             return LiveSession(id: "deepseek:\(t.id!)", agentId: "deepseek-model:\(t.model)",
                                task: t.title ?? t.cwd.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "DeepSeek Harness",
                                terminal: t.cwd.map { URL(fileURLWithPath: $0).lastPathComponent },
                                startedAt: t.startedAt ?? session.modifiedAt,
-                               endedAt: SessionPhase.read(t.evidence(processStarts: processStarts), rule: .process, at: now).inFlight
+                               endedAt: SessionPhase.read(evidence, rule: .process, at: now).inFlight
                                    ? nil : (t.lastActivityAt ?? t.startedAt ?? session.modifiedAt),
                                pctOfWindow: nil, tokensIn: t.inputTokens, tokensOut: t.outputTokens,
                                client: "DeepSeek Harness", transcriptPath: session.path,
-                               cacheReadTokens: t.cachedInputTokens, observedAt: now, workingDirectory: t.cwd,
+                               cacheReadTokens: t.cachedInputTokens, observedAt: evidence.newest, workingDirectory: t.cwd,
                                lastActivityAt: t.lastActivityAt)
         }.sorted { a, b in
             if a.isLive != b.isLive { return a.isLive }
@@ -98,7 +104,7 @@ public actor DeepSeekUsageProvider: UsageProvider, LedgerRecording {
         let notice = [indexed.notice, balanceNotice].compactMap { $0 }.joined(separator: " · ")
         let costs = await transcripts.costs(since: cutoff)
         var sessionCosts: [String: [String: Decimal]] = [:]
-        for session in indexed.sessions {
+        for session in recent {
             if let estimate = costs.logs[session.path] { sessionCosts["deepseek:\(session.transcript.id!)"] = estimate }
         }
         let balances = (balance?.balances ?? []).map {
@@ -113,22 +119,22 @@ public actor DeepSeekUsageProvider: UsageProvider, LedgerRecording {
                            sourceNotices: notice.isEmpty ? [:] : ["DeepSeek": notice], quotaNotices: balanceNotice.map { ["DeepSeek": $0] } ?? [:],
                            readingIssues: balanceNotice.map { ["DeepSeek": .readFailed($0)] } ?? [:],
                            billing: installed ? [billing] : [],
-                           completions: indexed.sessions.flatMap { $0.transcript.completions ?? [] },
-                           turns: indexed.sessions.flatMap { $0.transcript.sessionTurns })
+                           completions: recent.flatMap { $0.transcript.completions ?? [] },
+                           turns: recent.flatMap { $0.transcript.sessionTurns })
     }
 
-    /// Process starts only decide a running turn whose log went quiet, so the process table is inspected only once a log
-    /// has recorded no event for a while, at most every 30 seconds. Nil means it was not consulted and the turn keeps
-    /// running.
-    private func processStarts(for sessions: [DeepSeekTranscriptStore.Session], now: Date) async -> [Date]? {
+    /// The process table's start times and when it was read. Process starts only decide a running turn whose log went
+    /// quiet, so the table is inspected only once a log has recorded no event for a while, at most every 30 seconds. Nil
+    /// means it was not consulted and the turn keeps running.
+    private func processCheck(for sessions: [DeepSeekTranscriptStore.Session], now: Date) async -> (at: Date, starts: [Date])? {
         let quiet = sessions.contains { session in
             !session.transcript.isSubagent && session.transcript.sessionTurns.last?.state == .running
                 && now.timeIntervalSince(session.transcript.lastActivityAt ?? session.modifiedAt) >= SessionPhase.Limits.processCheck
         }
-        guard quiet else { lastProcessStarts = nil; return nil }
-        if let last = lastProcessStarts, now.timeIntervalSince(last.at) < SessionPhase.Limits.processRecheck { return last.starts }
+        guard quiet else { lastProcessCheck = nil; return nil }
+        if let last = lastProcessCheck, now.timeIntervalSince(last.at) < SessionPhase.Limits.processRecheck { return last }
         let starts = await readProcessStarts()
-        lastProcessStarts = (now, starts)
-        return starts
+        lastProcessCheck = (now, starts)
+        return (now, starts)
     }
 }

@@ -63,6 +63,8 @@ public actor UsageLedger {
     private let storage: LedgerStorage
     private var passOpen = false
     private var expiredAt: Date?
+    /// What `recachedBuckets(since:)` last read, by log, and the write mark and generation it was read at.
+    private var recachedRead: (mark: Int, generation: Int, byLog: [String: [UsageBucket]])?
     /// Changes when a failed pass rolled back writes that providers may already reflect in memory.
     public private(set) var generation = 0
     /// Grows with every change to a contribution; `changedKeys(after:)` names what changed since a mark taken earlier.
@@ -272,6 +274,64 @@ public actor UsageLedger {
             WHERE c.source = ? AND e.timestamp_ms >= ? GROUP BY c.key
             """, [.text(source), .integer(RecordCoding.milliseconds(since))]) { row in
             result[row.text(0) ?? ""] = Int(row.int(1))
+        }
+        return result
+    }
+
+    /// Prompt tokens sent again because the cache no longer held them, in the periods of `since` and later, by 15-minute
+    /// period and the model of the call that sent them: cache writes where that call wrote to the cache, input otherwise.
+    /// Every log that marks its prompts counts, whether or not a report lists its session, by the rule a session's turns
+    /// count them (`SessionUsageBuilder.recached`). Logs are read again only once the ledger wrote to them.
+    public func recachedBuckets(since: Date) throws -> [UsageBucket] {
+        let mark = storage.writes
+        var byLog: [String: [UsageBucket]]
+        if let read = recachedRead, read.generation == generation {
+            byLog = read.byLog
+            let changed = changedKeys(after: read.mark)
+            if !changed.isEmpty {
+                for key in changed { byLog[key] = nil }
+                byLog.merge(try readRecached(logs: changed), uniquingKeysWith: +)
+            }
+        } else {
+            byLog = try readRecached(logs: nil)
+        }
+        recachedRead = (mark, generation, byLog)
+        let start = RecordCoding.date(RecordCoding.milliseconds(since) / Self.bucketMilliseconds * Self.bucketMilliseconds)
+        var sums: [Date: [String: (sent: Int, written: Int)]] = [:]
+        for bucket in byLog.values.joined() where bucket.start >= start {
+            var sum = sums[bucket.start, default: [:]][bucket.agentId] ?? (0, 0)
+            sum.sent += bucket.tokensIn; sum.written += bucket.cacheWriteTokens
+            sums[bucket.start, default: [:]][bucket.agentId] = sum
+        }
+        return sums.keys.sorted().flatMap { start in
+            sums[start]!.keys.sorted().map { agentId in
+                let sum = sums[start]![agentId]!
+                return UsageBucket(start: start, agentId: agentId, tokensIn: sum.sent, tokensOut: 0, cacheWriteTokens: sum.written)
+            }
+        }
+    }
+
+    /// Each call in a counted log that marks its prompts, against the call before it in that log; nil `logs` reads every log.
+    private func readRecached(logs: Set<String>?) throws -> [String: [UsageBucket]] {
+        var result: [String: [UsageBucket]] = [:]
+        var keys = SQLiteConnection.Value.null
+        if let logs { keys = .text(String(decoding: try JSONEncoder().encode(logs.sorted()), as: UTF8.self)) }
+        try storage.connection.query("""
+            SELECT c.key, r.start_ms, r.agent, r.wrote, SUM(r.tokens_in) FROM (
+                SELECT e.contribution_id, e.timestamp_ms / 900000 * 900000 AS start_ms, e.agent, e.tokens_in, e.cache_read,
+                       e.cache_write > 0 AS wrote,
+                       LAG(e.tokens_in + e.cache_read) OVER (PARTITION BY e.contribution_id ORDER BY e.timestamp_ms, e.event) AS previous
+                FROM usage_event e WHERE e.contribution_id IN (
+                    SELECT c.id FROM contribution c WHERE c.counted = 1
+                    AND (?1 IS NULL OR c.key IN (SELECT value FROM json_each(?1)))
+                    AND EXISTS (SELECT 1 FROM session_mark m WHERE m.contribution_id = c.id AND m.kind = 0))
+            ) r JOIN contribution c ON c.id = r.contribution_id
+            WHERE r.previous IS NOT NULL AND r.cache_read * 2 < r.previous AND r.tokens_in * 2 >= r.previous
+            GROUP BY c.key, r.start_ms, r.agent, r.wrote
+            """, [keys]) { row in
+            let sent = Int(row.int(4))
+            result[row.text(0) ?? "", default: []].append(UsageBucket(start: RecordCoding.date(row.int(1)), agentId: storage.agentName(row.int(2)),
+                tokensIn: sent, tokensOut: 0, cacheWriteTokens: row.int(3) == 1 ? sent : 0))
         }
         return result
     }

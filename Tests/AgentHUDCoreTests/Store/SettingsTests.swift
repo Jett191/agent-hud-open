@@ -51,6 +51,19 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(Set(encoded.keys), ["id", "vendor", "model", "source", "enabled", "connected"])
     }
 
+    /// Agents may arrange the HUD only once a person allows it: off by default, off for settings saved before the
+    /// switch existed, and kept as set.
+    func testAgentToolsStartOffAndKeepTheirSwitch() throws {
+        XCTAssertFalse(Settings().agentTools)
+        XCTAssertFalse(try JSONDecoder().decode(Settings.self, from: Data(#"{"clientHooks":true}"#.utf8)).agentTools)
+        let on = Settings().with { $0.agentTools = true }
+        let data = try JSONEncoder().encode(on)
+        let stored = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(stored["agentTools"] as? Bool, true, "stored under its own key")
+        XCTAssertEqual(try JSONDecoder().decode(Settings.self, from: data), on)
+        XCTAssertFalse(try JSONDecoder().decode(Settings.self, from: JSONEncoder().encode(Settings())).agentTools)
+    }
+
     func testRoundTrip() throws {
         let original = Settings().with {
             $0.appearance = .light

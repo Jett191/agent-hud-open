@@ -141,9 +141,12 @@ final class ClaudeSessionOriginsTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(start[0]["extra"].stringValue, "kept")
         XCTAssertEqual(start[0]["hooks"].arrayValue?.last?["timeout"].countValue, 23)
         for event in ClaudeSessionOrigins.events {
-            let commands = (updated["hooks"][event].arrayValue ?? []).flatMap { $0["hooks"].arrayValue ?? [] }.compactMap { $0["command"].stringValue }
+            let handlers = (updated["hooks"][event].arrayValue ?? []).flatMap { $0["hooks"].arrayValue ?? [] }
+            let commands = handlers.compactMap { $0["command"].stringValue }
             XCTAssertEqual(commands.filter { $0.hasSuffix(" --session-origin-hook claude") }, ["'\(executable.path)' --session-origin-hook claude"])
             XCTAssertTrue(commands.contains("~/bin/log-session"))
+            XCTAssertEqual(handlers.filter { $0["command"].stringValue?.hasSuffix(" --session-origin-hook claude") == true }.map { $0["async"] },
+                           [.bool(true)], "where a session runs is a report: Claude Code goes on without waiting for it, an older handler included")
         }
         let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
         try FileManager.default.setAttributes([.modificationDate: timestamp], ofItemAtPath: settings.path)

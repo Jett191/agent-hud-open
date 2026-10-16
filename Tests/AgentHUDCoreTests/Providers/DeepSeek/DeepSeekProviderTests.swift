@@ -259,6 +259,37 @@ final class DeepSeekProviderTests: XCTestCase {
         XCTAssertEqual(finished.observedAtMs, nowMs)
     }
 
+    func testAMonthOfTokensListsOnlyTheWeeksSessionsTurnsAndCompletions() async throws {
+        let directory = try temporaryDirectory(), now = now
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func session(_ id: String, model: String, daysAgo: Double) throws {
+            let at = now.addingTimeInterval(-daysAgo * 86400), start = Int64(at.timeIntervalSince1970 * 1000), file = try logFile(directory, id: id)
+            let lines = """
+            {"type":"session","version":0,"id":"\(id)","createdAt":\(start - 1000),"cwd":"/fixture"}
+            {"type":"turn/start","seq":0,"time":\(start),"data":{"turn":1}}
+            {"type":"request/header","seq":1,"time":\(start),"data":{"header":{"config":{"provider":"deepseek-official","model":"\(model)"}},"reason":"initial"}}
+            {"type":"assistant/message","seq":2,"time":\(start),"data":{"turn":1,"step":1,"usage":{"inputTokens":100,"outputTokens":10}}}
+            {"type":"turn/end","seq":3,"time":\(start + 1000),"data":{"turn":1,"reason":{"kind":"completed"}}}
+            """
+            try (lines + "\n").write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.modificationDate: at.addingTimeInterval(1)], ofItemAtPath: file.path)
+        }
+        try session("recent", model: "deepseek-v4-flash", daysAgo: 2)
+        try session("old", model: "deepseek-v4-pro", daysAgo: 20)
+        let ledger = UsageLedger.inMemory()
+        let provider = DeepSeekUsageProvider(directory: directory, transcripts: DeepSeekTranscriptStore(root: directory, ledger: ledger),
+                                             readProcessStarts: { [] }, clock: { now })
+        let report = try await provider.fetchUsage(agents: [], historyHours: 31 * 24 + 25)
+        XCTAssertEqual(report.sessions.map(\.id), ["deepseek:recent"])
+        XCTAssertFalse(report.turns.isEmpty)
+        XCTAssertTrue(report.turns.allSatisfy { $0.sessionID.hasSuffix("recent") }, "\(report.turns.map(\.sessionID))")
+        XCTAssertFalse(report.completions.isEmpty)
+        XCTAssertTrue(report.completions.allSatisfy { $0.sessionID.hasSuffix("recent") }, "\(report.completions.map(\.sessionID))")
+        XCTAssertEqual(Set(report.consumers.map(\.id)), ["deepseek-model:deepseek-v4-flash", "deepseek-model:deepseek-v4-pro"])
+        let recorded = try await ledger.buckets(since: now.addingTimeInterval(-31 * 86400))
+        XCTAssertEqual(recorded.reduce(0) { $0 + $1.tokensIn }, 200, "both logs' tokens are recorded")
+    }
+
     func testProviderRefreshesProcessEvidenceForAnUnchangedQuietLog() async throws {
         let dir = try temporaryDirectory(), now = now
         defer { try? FileManager.default.removeItem(at: dir) }

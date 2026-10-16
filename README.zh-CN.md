@@ -194,3 +194,13 @@ Swift 包提供 `AgentHUDSupport`（记录与身份）、`AgentHUDCore`（数据
 ## 许可证
 
 [Apache-2.0](LICENSE)。数据源引用与图标素材沿用各自的[第三方声明](THIRD_PARTY_NOTICES.txt)与[图标许可](Sources/AgentHUDDesktop/Resources/LobeIcons-LICENSE.txt)。
+
+## Star 历史
+
+<a href="https://www.star-history.com/?repos=jazzenchen%2Fagent-hud-open&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=jazzenchen/agent-hud-open&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=jazzenchen/agent-hud-open&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=jazzenchen/agent-hud-open&type=date&legend=top-left" />
+ </picture>
+</a>

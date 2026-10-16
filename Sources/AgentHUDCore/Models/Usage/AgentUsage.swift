@@ -22,8 +22,8 @@ public struct AgentUsage: Hashable, Sendable, Identifiable {
     public let cost: ModelCatalog.ListCost?
     /// The share of the price spent reading context back from the cache, 0…1; nil when no model has a price.
     public let cacheReadShare: Double?
-    /// What its sessions paid, in US dollars, to send context again after the cache lapsed or the model changed; nil when
-    /// none did.
+    /// What its calls paid, in US dollars, to send context again after the cache lapsed or the model changed, those of
+    /// sessions it no longer lists included; nil when none did.
     public let recachedCost: Decimal?
     /// The most tokens of the counted kinds first.
     public let models: [Model]
@@ -31,9 +31,10 @@ public struct AgentUsage: Hashable, Sendable, Identifiable {
     public let sessions: [Session]
 
     /// Every agent with tokens in `interval`, the most tokens of `dimensions` first, as agents, models and sessions are
-    /// ranked throughout; the international list price breaks ties. Buckets give the models, and each session's breakdown
-    /// its part of the interval. Prices follow each model's platform.
-    public static func build(usage: [UsageBucket], consumers: [AgentDescriptor], sessions: [LiveSession],
+    /// ranked throughout; the international list price breaks ties. Buckets give the models, each session's breakdown
+    /// its part of the interval, and `recached` (`UsageReport.recached`) what was sent again. Prices follow each model's
+    /// platform.
+    public static func build(usage: [UsageBucket], recached sent: [UsageBucket], consumers: [AgentDescriptor], sessions: [LiveSession],
                              breakdowns: [String: SessionUsage], vendor sessionVendor: (LiveSession) -> String?,
                              interval: DateInterval, dimensions: TokenDimensions,
                              region: (String) -> ModelCatalog.Region) -> [AgentUsage] {
@@ -55,11 +56,10 @@ public struct AgentUsage: Hashable, Sendable, Identifiable {
                 let entry = Session(id: session.id, tokens: byModel.values.reduce(TokenKinds(), +), cost: ModelCatalog.cost(of: byModel, region: region))
                 spent[vendor, default: []].append((entry, Rank(byModel, dimensions)))
             }
-            for turn in breakdown.turns where interval.contains(turn.start) {
-                guard let sent = turn.recachedTokens else { continue }
-                let kinds = turn.tokens.cacheWriteTokens > 0 ? TokenKinds(cacheWrite: sent) : TokenKinds(input: sent)
-                if let cost = ModelCatalog.cost(agentId: session.agentId, summed: kinds)?.amount { recached[vendor, default: 0] += cost }
-            }
+        }
+        for bucket in sent where bucket.overlaps(interval) {
+            guard let vendor = vendors[bucket.agentId], let cost = ModelCatalog.cost(agentId: bucket.agentId, summed: bucket.kinds)?.amount else { continue }
+            recached[vendor, default: 0] += cost
         }
         return tokens.map { vendor, models in
             var price: Decimal = 0, reading: Decimal = 0

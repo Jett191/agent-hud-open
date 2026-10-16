@@ -10,7 +10,7 @@ final class LedgerFileStoreTests: XCTestCase, @unchecked Sendable {
         static let summaryKey = "keys"
         static let version = 1
         static func summary(for url: URL) -> [String] { [] }
-        static func ingest(_ lines: Data, into keys: inout [String]) -> [UsageLedger.Event] {
+        static func ingest(_ lines: Data, at offset: Int, into keys: inout [String]) -> [UsageLedger.Event] {
             lines.split(separator: 0x0A).map { line in
                 let parts = String(decoding: line, as: UTF8.self).split(separator: " ").map(String.init)
                 keys.append(parts[0])
@@ -25,8 +25,8 @@ final class LedgerFileStoreTests: XCTestCase, @unchecked Sendable {
         static let summaryKey = Requests.summaryKey
         static let version = 2
         static func summary(for url: URL) -> [String] { [] }
-        static func ingest(_ lines: Data, into keys: inout [String]) -> [UsageLedger.Event] {
-            Requests.ingest(Data(lines.split(separator: 0x0A).filter { $0.first != UInt8(ascii: "x") }.joined(separator: [0x0A])), into: &keys)
+        static func ingest(_ lines: Data, at offset: Int, into keys: inout [String]) -> [UsageLedger.Event] {
+            Requests.ingest(Data(lines.split(separator: 0x0A).filter { $0.first != UInt8(ascii: "x") }.joined(separator: [0x0A])), at: offset, into: &keys)
         }
     }
 
@@ -69,7 +69,8 @@ final class LedgerFileStoreTests: XCTestCase, @unchecked Sendable {
         try "b 1\nx 2\n".write(to: expired, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-10 * 86400)], ofItemAtPath: log.path)
         try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-UsageLedger.retention - 86400)], ofItemAtPath: expired.path)
-        _ = await TailLogStore<Requests>(roots: [root], ledger: ledger, watchesChanges: false) { _ in true }.index(since: .distantPast, timeBudget: 5)
+        let first = await TailLogStore<Requests>(roots: [root], ledger: ledger, watchesChanges: false) { _ in true }.index(since: .distantPast, timeBudget: 5)
+        let path = try XCTUnwrap(first.logs.first { $0.path.hasSuffix("/s.log") }?.path)
         var total = try await tokens(ledger)
         XCTAssertEqual(total, 18)
 
@@ -78,7 +79,8 @@ final class LedgerFileStoreTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(pass.logs.count, 0, "both logs are older than the cutoff")
         XCTAssertEqual(pass.filesRead, 1, "a log the ledger no longer holds usage of is left as it is")
         total = try await tokens(ledger)
-        XCTAssertEqual(total, 13, "the log was read again from the start and replaced what the other version counted")
+        XCTAssertEqual(total, 13, "the log was read again from the start and replaced, in the same write, what the other version counted")
+        XCTAssertNil(upgraded.entry(path)?.carried, "a log read whole in one pass carries nothing of the other version")
         let again = await upgraded.index(since: now.addingTimeInterval(-7 * 86400), timeBudget: 5)
         XCTAssertEqual(again.filesRead, 0)
     }

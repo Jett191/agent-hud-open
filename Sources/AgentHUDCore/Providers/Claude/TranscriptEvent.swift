@@ -32,18 +32,23 @@ public struct TranscriptEvent: Hashable, Sendable {
     public let isPrompt: Bool
     /// The boundary Claude Code writes where it compacted the conversation.
     public let isCompaction: Bool
+    /// A `system` line Claude Code writes once the agent has stopped: the summary of the Stop hooks it ran
+    /// (`stop_hook_summary`) or the turn's duration (`turn_duration`).
+    public let isStop: Bool
     /// Surface that wrote the line, from the `entrypoint` current builds stamp on every message ("cli",
     /// "claude-desktop", "claude-vscode", "sdk-ts"); nil for older builds.
     public let entrypoint: String?
     /// An assistant line calling `StructuredOutput`: the result a workflow agent hands back, after which its log ends
     /// without an `end_turn`.
     public let returnsStructuredOutput: Bool
+    /// Where the line begins in its log, when it was read from a known place in one.
+    public var offset: Int?
 
     public init(
         timestamp: Date, role: Role, model: String?, inputTokens: Int, cacheCreationTokens: Int, cacheReadTokens: Int,
         outputTokens: Int, thinkingTokens: Int = 0, text: String?, sessionId: String?, cwd: String?, messageId: String? = nil,
         requestId: String? = nil, stopReason: String? = nil, isSidechain: Bool = false, isPrompt: Bool = false,
-        isCompaction: Bool = false, entrypoint: String? = nil, returnsStructuredOutput: Bool = false
+        isCompaction: Bool = false, isStop: Bool = false, entrypoint: String? = nil, returnsStructuredOutput: Bool = false
     ) {
         self.timestamp = timestamp
         self.role = role
@@ -62,6 +67,7 @@ public struct TranscriptEvent: Hashable, Sendable {
         self.isSidechain = isSidechain
         self.isPrompt = isPrompt
         self.isCompaction = isCompaction
+        self.isStop = isStop
         self.entrypoint = entrypoint
         self.returnsStructuredOutput = returnsStructuredOutput
     }

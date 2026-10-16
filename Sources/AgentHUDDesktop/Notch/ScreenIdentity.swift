@@ -41,6 +41,18 @@ enum ScreenIdentity {
         return name.isEmpty ? L10n.text("显示器", "Display") : name
     }
 
+    /// A display's role, in English, as an agent is told it, never its system name, which can be a personal device
+    /// name: "Built-in display" for the Mac's own, "Main display" for the one with the menu bar, else "Display" and its
+    /// place among the displays counted from 1.
+    /// - index: the display's place in `NSScreen.screens`, where the main display is first.
+    static func role(of screen: NSScreen, at index: Int) -> String {
+        if let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+           CGDisplayIsBuiltin(CGDirectDisplayID(number.uint32Value)) != 0 {
+            return "Built-in display"
+        }
+        return index == 0 ? "Main display" : "Display \(index + 1)"
+    }
+
     static func hasNotch(_ screen: NSScreen) -> Bool { screen.safeAreaInsets.top > 0 }
 
     /// The notch's own size, for previews that should show this machine's shape rather than a stand-in.
@@ -56,6 +68,13 @@ enum ScreenIdentity {
     @MainActor
     static func placement(for screen: NSScreen, in settings: AgentHUDCore.Settings) -> ScreenPlacement {
         settings.placement(on: key(for: screen), hasNotch: hasNotch(screen))
+    }
+
+    /// The placement a screen's HUD draws: the stored one, or the default its hardware deserves, with the style draft an
+    /// agent proposed for that screen drawn over it (`SettingsStore.effectivePlacement(on:hasNotch:)`).
+    @MainActor
+    static func placement(for screen: NSScreen, in settings: SettingsStore) -> ScreenPlacement {
+        settings.effectivePlacement(on: key(for: screen), hasNotch: hasNotch(screen))
     }
 
     /// The screen the pointer is on, which is the one alerts belong on.

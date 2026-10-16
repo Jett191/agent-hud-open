@@ -34,13 +34,20 @@ final class SubscriptionTests: XCTestCase {
 
     func testClaudeMissingOrUnknownMetadataDoesNotInventAMultiplier() throws {
         let profiles: [Data?] = [nil, Data("invalid".utf8), Data("{}".utf8), try profile(tier: "future_tier"),
-                                try profile(tier: "default_claude_max_20x", organization: "claude_team")]
+                                try profile(tier: "default_claude_max_20x", organization: "claude_future")]
         for data in profiles {
             XCTAssertEqual(ClaudeSubscription.plan(type: "max", profileData: data), "max")
         }
         let max = try profile(tier: "default_claude_max_20x")
         XCTAssertNil(ClaudeSubscription.plan(type: nil, profileData: max), "a cached profile cannot create a ready subscription")
-        XCTAssertEqual(ClaudeSubscription.plan(type: "pro", profileData: max), "pro", "the engine remains authoritative for the current plan")
+    }
+
+    /// The engine keeps the plan its login was made on; the profile Claude Code refreshes on start has the current one.
+    func testClaudeProfileNamesThePlanAfterAnUpgradeOrDowngrade() throws {
+        XCTAssertEqual(ClaudeSubscription.plan(type: "pro", profileData: try profile(tier: "default_claude_max_20x")), "max_20x")
+        XCTAssertEqual(ClaudeSubscription.plan(type: "pro", profileData: try profile(tier: "future_tier")), "max")
+        XCTAssertEqual(ClaudeSubscription.plan(type: "max", profileData: try profile(tier: "default_claude_pro", organization: "claude_pro")), "pro")
+        XCTAssertEqual(ClaudeSubscription.plan(type: "max", profileData: try profile(tier: "default_claude_max_20x", organization: "claude_team")), "team")
     }
 
     func testClaudeUserTierTakesPrecedenceOverOrganizationTier() throws {

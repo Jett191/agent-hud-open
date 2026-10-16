@@ -21,59 +21,47 @@ final class UsageRefreshTests: XCTestCase, @unchecked Sendable {
     }
 
     @MainActor
-    func testPublishAndMergeHooksFinishInsideThePass() async throws {
+    func testThePublishHookFinishesInsideThePass() async throws {
         let gate = AsyncStream<Void>.makeStream()
         defer { gate.continuation.finish() }
         let published = expectation(description: "publish started")
-        var publishes: [UsageReport] = [], merges: [UsageReport] = []
+        var publishes: [UsageReport] = []
         let provider = CountingProvider()
         let store = store(provider, hooks: UsageCollectionHooks(publish: { report in
             publishes.append(report)
             if publishes.count == 1 { published.fulfill(); for await _ in gate.stream { break } }
-        }, merge: { report in
-            merges.append(report)
-            return UsageReport(generatedAt: report.generatedAt, snapshots: report.snapshots, sessions: report.sessions,
-                               notice: "merged", discoveredAgents: report.discoveredAgents)
         }))
         let pass = Task { @MainActor in await store.refresh() }
         await fulfillment(of: [published], timeout: 2)
         await store.refresh()
-        await store.remerge()
         let during = await provider.fetches
         XCTAssertEqual(during, 1, "a refresh while the publish hook runs waits for the next pass")
-        XCTAssertTrue(merges.isEmpty, "a remerge requested during the pass is served by the pass's own merge")
-        XCTAssertNil(store.report, "nothing is displayed before the hooks return")
+        XCTAssertNil(store.report, "nothing is displayed before the hook returns")
         gate.continuation.finish()
         await pass.value
-        XCTAssertEqual(merges.count, 1)
-        XCTAssertNil(merges[0].notice, "the merge hook receives the provider's report")
-        XCTAssertEqual(store.report?.notice, "merged")
+        XCTAssertEqual(store.report?.generatedAt, publishes.first?.generatedAt, "the store shows the report the hook received")
         await store.refresh()
         let after = await provider.fetches
         XCTAssertEqual(after, 2)
         XCTAssertEqual(publishes.count, 2)
     }
 
+    /// The after-pass hook runs last in a pass, once the store shows the report the publish hook received; a refresh with
+    /// no file watch cannot name what changed.
     @MainActor
-    func testRemergeRunsOnlyTheMergeHookOnTheLastProviderReport() async throws {
-        var label = "first", publishes = 0
+    func testTheAfterPassHookRunsOnceTheReportIsShown() async throws {
+        var order: [String] = [], handed: [Set<String>?] = []
+        weak var shown: UsageStore?
         let provider = CountingProvider()
-        let store = store(provider, hooks: UsageCollectionHooks(publish: { _ in publishes += 1 }, merge: { report in
-            UsageReport(generatedAt: report.generatedAt, snapshots: [], sessions: [],
-                        notice: (report.notice ?? "") + label)
+        let store = store(provider, hooks: UsageCollectionHooks(publish: { _ in order.append("publish") }, afterPass: { changed in
+            order.append(shown?.report == nil ? "after, before it is shown" : "after")
+            handed.append(changed)
         }))
-        await store.remerge()
-        XCTAssertNil(store.report, "no provider report yet")
+        shown = store
         await store.refresh()
-        label = "second"
-        await store.remerge()
-        let fetches = await provider.fetches
-        XCTAssertEqual(fetches, 1)
-        XCTAssertEqual(publishes, 1)
-        XCTAssertEqual(store.report?.notice, "second", "the merge starts again from the provider's report")
-        store.replace(report: UsageReport(generatedAt: Date(), snapshots: [], sessions: []))
-        await store.remerge()
-        XCTAssertNil(store.report?.notice, "an installed report is not merged over")
+        await store.refresh()
+        XCTAssertEqual(order, ["publish", "after", "publish", "after"])
+        XCTAssertEqual(handed, [nil, nil])
     }
 
     @MainActor

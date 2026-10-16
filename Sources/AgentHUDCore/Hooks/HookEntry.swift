@@ -2,8 +2,9 @@ import Foundation
 
 /// The commands a client's hooks run, and the adapter commands that install them without starting the application:
 /// short-lived processes that leave what a client sent for the running application, or hand it over and wait for the
-/// answer, and quit. None of them starts the interface, queries an account or holds up the client. A host runs them
-/// first thing at launch.
+/// answer, and quit. `--mcp` is the one a client keeps: the server its agent calls Agent HUD's tools through, for as
+/// long as the client holds its input open. None of them starts the interface, queries an account or holds up the
+/// client. A host runs them first thing at launch.
 public enum HookEntry {
     /// Runs the command `arguments` name — the process's arguments, its executable first — and returns its exit status;
     /// nil when they name none, and the application starts.
@@ -18,6 +19,7 @@ public enum HookEntry {
                 return 1
             }
         }
+        if MCPStdio.isRequested(by: arguments) { return MCPStdio.run() }
         guard arguments.count == 3 else { return nil }
         let name = arguments[2]
         switch arguments[1] {

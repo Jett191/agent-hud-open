@@ -8,15 +8,33 @@ public enum UsageAnalytics {
     /// Recent pace: consumption over the cycle's latest `paceInterval` of readings, including idle time.
     /// A younger or shorter observed series is used whole.
     public static func burnRate(samples: [QuotaSample], cycle: QuotaCycle?, now: Date) -> BurnRate? {
-        guard let cycle, now >= cycle.start, now < cycle.resetAt else { return nil }
+        pace(samples: samples, cycle: cycle, now: now).burnRate
+    }
+
+    /// How far the series has come while its readings still span less than a burn rate needs; nil once they span enough.
+    /// Older readings prove a previous series existed. Without that evidence, describe initial sampling rather
+    /// than guessing a reset from a full quota. Wall-clock time without another reading never advances the span.
+    public static func sampling(samples: [QuotaSample], cycle: QuotaCycle?, now: Date) -> QuotaSampling? {
+        pace(samples: samples, cycle: cycle, now: now).sampling
+    }
+
+    /// The burn rate and the sampling progress from one pass over the cycle's series: a series too short for a rate has
+    /// only the progress, a longer one only the rate.
+    static func pace(samples: [QuotaSample], cycle: QuotaCycle?, now: Date) -> (burnRate: BurnRate?, sampling: QuotaSampling?) {
+        guard let cycle, now >= cycle.start, now < cycle.resetAt else { return (nil, nil) }
         let sampled = sampledQuota(samples, cycle: cycle, now: now)
-        guard let earliest = sampled.first, let last = sampled.last else { return nil }
+        guard let earliest = sampled.first, let last = sampled.last else { return (nil, nil) }
+        let span = last.timestamp.timeIntervalSince(earliest.timestamp)
+        guard span >= cycle.sampleInterval else {
+            return (nil, QuotaSampling(elapsed: span, required: cycle.sampleInterval,
+                                       afterReset: samples.contains { $0.timestamp < earliest.timestamp }))
+        }
         let cutoff = last.timestamp.addingTimeInterval(-cycle.paceInterval)
         let first = sampled.last { $0.timestamp <= cutoff } ?? earliest
         let elapsed = last.timestamp.timeIntervalSince(first.timestamp)
         // Whole-point readings say nothing about a shorter span.
-        guard elapsed >= cycle.sampleInterval else { return nil }
-        return BurnRate(pctPerHour: max(0, first.remainingPct - last.remainingPct) / (elapsed / 3600))
+        guard elapsed >= cycle.sampleInterval else { return (nil, nil) }
+        return (BurnRate(pctPerHour: max(0, first.remainingPct - last.remainingPct) / (elapsed / 3600)), nil)
     }
 
     /// Keep the observed baseline, each cycle-aligned bucket's last reading, and the latest partial bucket.

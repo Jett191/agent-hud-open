@@ -1,26 +1,36 @@
 import SwiftUI
 import AgentHUDCore
 
-/// Wallet money belongs to the account beside its quota windows. Its amounts never imply a subscription percentage.
+/// Wallet money belongs to the account beside its quota windows. Its amounts never imply a subscription percentage. In
+/// half a line, which has no bar rows to line up with, the name is as wide as it is, and the amounts go under it where
+/// they do not fit beside it.
 struct AccountWalletRow: View {
     let wallet: AccountWallet
     private let theme = Theme.island
+    @Environment(\.panelHalf) private var half
 
     var body: some View {
         let labels = AccountWalletLabels(wallet: wallet)
-        HStack(spacing: IslandRowLayout.spacing) {
-            Image(systemName: wallet.kind == .prepaid ? "creditcard" : "dollarsign.circle")
-                .font(.ui(10))
-                .foregroundStyle(theme.tertiary)
-                .frame(width: IslandRowLayout.markerWidth)
-            Text(labels.name)
-                .font(.ui(12, .medium))
-                .foregroundStyle(theme.secondary)
-                .frame(width: IslandRowLayout.nameWidth, alignment: .leading)
-            Spacer(minLength: 8)
-            Text(labels.amounts)
-                .font(.tabular(12, .semibold))
-                .foregroundStyle(theme.text)
+        Group {
+            if half {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: IslandRowLayout.halfSpacing) {
+                        name(labels)
+                        Spacer(minLength: 8)
+                        amounts(labels)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: IslandRowLayout.halfSpacing) { name(labels) }
+                        amounts(labels).padding(.leading, IslandRowLayout.markerWidth + IslandRowLayout.halfSpacing)
+                    }
+                }
+            } else {
+                HStack(spacing: IslandRowLayout.spacing) {
+                    name(labels)
+                    Spacer(minLength: 8)
+                    amounts(labels)
+                }
+            }
         }
         .lineLimit(1)
         .padding(.horizontal, IslandRowLayout.inset)
@@ -31,6 +41,25 @@ struct AccountWalletRow: View {
             return L10n.text("读取时间：\(date)", "Read at: \(date)")
         } ?? "")
         .accessibilityElement(children: .combine)
+    }
+
+    /// The wallet's mark and its name, in the name column of a bar row's width across the whole line.
+    @ViewBuilder
+    private func name(_ labels: AccountWalletLabels) -> some View {
+        Image(systemName: wallet.kind == .prepaid ? "creditcard" : "dollarsign.circle")
+            .font(.ui(10))
+            .foregroundStyle(theme.tertiary)
+            .frame(width: IslandRowLayout.markerWidth)
+        Text(labels.name)
+            .font(.ui(12, .medium))
+            .foregroundStyle(theme.secondary)
+            .frame(width: half ? nil : IslandRowLayout.nameWidth, alignment: .leading)
+    }
+
+    private func amounts(_ labels: AccountWalletLabels) -> some View {
+        Text(labels.amounts)
+            .font(.tabular(12, .semibold))
+            .foregroundStyle(theme.text)
     }
 }
 

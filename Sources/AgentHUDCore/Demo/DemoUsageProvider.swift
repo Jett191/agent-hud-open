@@ -54,7 +54,8 @@ public struct DemoUsageProvider: UsageProvider {
             completions: stage?.completions ?? [],
             accounts: accounts.isEmpty ? nil : accounts,
             sessionUsage: DemoData.sessionUsage(now: now),
-            periods: periods
+            periods: periods,
+            recached: DemoData.recached(now: now)
         )
     }
 }

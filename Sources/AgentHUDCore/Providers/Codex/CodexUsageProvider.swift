@@ -204,7 +204,30 @@ public actor CodexUsageProvider: UsageProvider, LedgerRecording {
         let now = clock()
         let weekAgo = now.addingTimeInterval(-AlertPolicy.insightsLookback)
         let indexed = await transcripts.index(since: min(weekAgo, now.addingTimeInterval(-Double(historyHours) * 3600)))
-        let terminalOrigins = await readTerminalOrigins(Set(indexed.sessions.compactMap(\.transcript.id)))
+        // Tokens and models come from every rollout of `historyHours`; sessions only from those active in the session
+        // window. Spawned agents and guardians keep rollouts of their own that name the thread that started them; a
+        // session reported takes every rollout below it, whenever that was last written, and so does its breakdown.
+        let sessionStart = SessionWindow.start(at: now)
+        var children: [String: [CodexTranscriptStore.Session]] = [:]
+        for session in indexed.sessions where session.transcript.isSubagent {
+            if let parent = session.transcript.parentThreadID { children[parent, default: []].append(session) }
+        }
+        func descendants(of id: String) -> [CodexTranscriptStore.Session] {
+            var found: [CodexTranscriptStore.Session] = [], queue = [id], seen: Set<String> = [id]
+            while let next = queue.popLast() {
+                for child in children[next] ?? [] {
+                    found.append(child)
+                    if let childID = child.transcript.id, seen.insert(childID).inserted { queue.append(childID) }
+                }
+            }
+            return found
+        }
+        let recent = indexed.sessions.filter { ($0.transcript.lastEventAt ?? $0.modifiedAt) >= sessionStart }
+        let roots = recent.filter { !$0.transcript.isSubagent && !$0.transcript.isInternal }
+        var reportedPaths = Set(recent.map(\.path))
+        for root in roots { reportedPaths.formUnion(descendants(of: root.transcript.id!).map(\.path)) }
+        let reported = indexed.sessions.filter { reportedPaths.contains($0.path) }
+        let terminalOrigins = await readTerminalOrigins(Set(reported.compactMap(\.transcript.id)))
         let origins = sessionOriginsDirectory.map { CodexSessionOrigins.read(directory: $0) } ?? [:]
         func navigationTarget(for transcript: CodexTranscript) -> SessionNavigationTarget? {
             if let id = transcript.id {
@@ -233,25 +256,9 @@ public actor CodexUsageProvider: UsageProvider, LedgerRecording {
             let samples = await history.samples(agentId: snapshot.agentId, since: QuotaMath.historyStart(for: snapshot, now: now))
             byAgent[snapshot.agentId] = QuotaMath.insights(snapshot: snapshot, samples: samples, now: now)
         }
-        // Spawned agents and guardians keep rollouts of their own that name the thread that started them; a session's
-        // breakdown takes every rollout below it.
-        var children: [String: [CodexTranscriptStore.Session]] = [:]
-        for session in indexed.sessions where session.transcript.isSubagent {
-            if let parent = session.transcript.parentThreadID { children[parent, default: []].append(session) }
-        }
-        func descendants(of id: String) -> [String] {
-            var paths: [String] = [], queue = [id], seen: Set<String> = [id]
-            while let next = queue.popLast() {
-                for child in children[next] ?? [] {
-                    paths.append(child.path)
-                    if let childID = child.transcript.id, seen.insert(childID).inserted { queue.append(childID) }
-                }
-            }
-            return paths.sorted()
-        }
         func liveSession(_ session: CodexTranscriptStore.Session, ancestors: Set<String> = []) -> LiveSession {
-            let t = session.transcript, id = t.id!
-            let live = SessionPhase.read(t.evidence, rule: .rollout, at: now).inFlight
+            let t = session.transcript, id = t.id!, evidence = t.evidence
+            let live = SessionPhase.read(evidence, rule: .rollout, at: now).inFlight
             let seen = ancestors.union([id])
             let agents = (children[id] ?? []).filter {
                 !$0.transcript.isInternal && !seen.contains($0.transcript.id!)
@@ -267,11 +274,11 @@ public actor CodexUsageProvider: UsageProvider, LedgerRecording {
                                endedAt: live ? nil : (t.lastActivityAt ?? session.modifiedAt),
                                pctOfWindow: nil, tokensIn: t.inputTokens,
                                tokensOut: t.outputTokens, client: t.client, transcriptPath: session.path,
-                               cacheReadTokens: t.cachedInputTokens, observedAt: now, workingDirectory: t.cwd,
-                               subagentTranscripts: descendants(of: id), agentName: t.agentName, subagentSessions: agents,
+                               cacheReadTokens: t.cachedInputTokens, observedAt: evidence.newest, workingDirectory: t.cwd,
+                               subagentTranscripts: descendants(of: id).map(\.path).sorted(), agentName: t.agentName, subagentSessions: agents,
                                lastActivityAt: t.lastEventAt, navigationTarget: navigationTarget(for: t))
         }
-        let sessions = indexed.sessions.filter { !$0.transcript.isSubagent && !$0.transcript.isInternal }.map { session in
+        let sessions = roots.map { session in
             (session: session, live: SessionPhase.read(session.transcript.evidence, rule: .rollout, at: now).inFlight)
         }.sorted { a, b in
             if a.live != b.live { return a.live }
@@ -305,7 +312,7 @@ public actor CodexUsageProvider: UsageProvider, LedgerRecording {
                 aliases: reading.limits.partialKeys,
                 quotaWindowIDs: Set(reading.limits.rows(home: source).map(\.id)))
         }
-        let completions = indexed.sessions.flatMap { session in
+        let completions = reported.flatMap { session in
             (session.transcript.completions ?? []).map { completion in
                 var named = completion
                 named.task = session.title ?? completion.task
@@ -321,7 +328,7 @@ public actor CodexUsageProvider: UsageProvider, LedgerRecording {
                            consumerIdsByQuota: consumerIdsByQuota, codexResetCredits: selected.count == 1 ? selected.first?.1.limits.rateLimitResetCredits : nil,
                            codexResetCreditsObservedAt: selected.count == 1 && selected.first?.1.limits.rateLimitResetCredits != nil ? selected.first?.1.at : nil,
                            completions: completions,
-                           turns: indexed.sessions.flatMap { $0.transcript.sessionTurns },
+                           turns: reported.flatMap { $0.transcript.sessionTurns },
                            accounts: lastRequestAt == nil || selected.isEmpty && !failures.isEmpty ? nil : ["Codex": observations])
     }
 }

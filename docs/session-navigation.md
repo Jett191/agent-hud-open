@@ -2,7 +2,7 @@
 
 ## Overview
 
-A completion reminder offers token usage on the left and session return on the right. In the panel's session list, the title returns to the agent and the token count opens usage. The client owns the session identity; the desktop layer opens it after collapsing the HUD. An unavailable destination leaves token usage available, and a rejected return remains available for retry.
+A completion reminder offers token usage on the left and session return on the right. In the panel's session list, the title returns to the agent and the token count opens usage; in its quota list, an agent's logo and name return to the newest of its sessions of the past week that has a destination, show the pointing hand on hover and look as they always do, and an agent without such a session is not clickable. The client owns the session identity; the desktop layer opens it after collapsing the HUD. An unavailable destination leaves token usage available, and a rejected return remains available for retry.
 
 ## Model
 
@@ -55,7 +55,7 @@ A completion reminder offers token usage on the left and session return on the r
 | --- | --- |
 | Local target model | `Sources/AgentHUDCore/Models/Sessions/SessionNavigationTarget.swift` |
 | Client dispatch | `Sources/AgentHUDDesktop/App/SessionNavigator.swift`, `AntigravityNavigation.swift` |
-| HUD navigation | `Sources/AgentHUDDesktop/Notch/ScreenHUD.swift`, `Alerts/IslandAlertViews.swift`, `Panel/HoverPanelView.swift` |
+| HUD navigation | `Sources/AgentHUDDesktop/Notch/ScreenHUD.swift`, `Alerts/IslandAlertViews.swift`, `Panel/HoverPanelView.swift`, `Panel/HoverPanelView+Sessions.swift` |
 | Observer capture | `Sources/AgentHUDCore/Hooks/PiSessionObserver.swift`, `OpenCodeSessionObserver.swift` |
 | Codex terminal identity | `Sources/AgentHUDCore/Hooks/CodexSessionOrigins.swift`, `Sources/AgentHUDCore/Providers/Codex/CodexTerminalOrigins.swift`, `CodexDaemonOriginTransport.swift` |
 | Claude session identity | `Sources/AgentHUDCore/Hooks/ClaudeSessionOrigins.swift`, `Sources/AgentHUDCore/Providers/Claude/ClaudeCodeProvider.swift`, `ClaudeDesktopSessions.swift` |

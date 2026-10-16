@@ -291,27 +291,40 @@ final class PermissionHookTests: XCTestCase, @unchecked Sendable {
         }
     }
 
-    func testCodexAutomaticReviewReturnsWithoutForwardingToTheHUD() throws {
+    /// Whether the user reviews the request's turn, by its log alone unless the test gives what the app already follows.
+    private func reviewed(_ body: [String: Any], reviewers: CodexTurnReviewers = CodexTurnReviewers(),
+                          thread: @escaping @Sendable (String) -> JSONValue? = { _ in nil }) async throws -> Bool {
+        await CodexPermissionReviewer.isUser(payload: try ProviderJSON.read(JSONSerialization.data(withJSONObject: body)),
+                                             reviewers: reviewers, thread: thread)
+    }
+
+    func testTheCodexHookForwardsEveryRequestAndReadsNothingOfTheSession() throws {
+        var body = payload()
+        body["turn_id"] = "turn"
+        body["transcript_path"] = "/nonexistent/rollout.jsonl"
+        body["permission_mode"] = "default"
+        let data = try JSONSerialization.data(withJSONObject: body)
+        let forwarded = try ProviderJSON.read(try XCTUnwrap(PermissionHookClient.tagged(data, source: .codex)))
+        XCTAssertEqual(forwarded[PermissionHookClient.sourceKey].stringValue, "codex")
+        XCTAssertEqual(forwarded["tool_input"], try ProviderJSON.read(data)["tool_input"],
+                       "who reviews the turn is the app's to know; the hook hands the request over as it came")
+    }
+
+    func testCodexAutomaticReviewIsNotTheUsersToAnswer() async throws {
         let transcript = try directory().appendingPathComponent("rollout.jsonl")
         try Data(#"{"type":"turn_context","payload":{"turn_id":"turn","approvals_reviewer":"auto_review"}}"#.utf8).write(to: transcript)
         var body = payload()
         body["turn_id"] = "turn"
         body["transcript_path"] = transcript.path
         body["permission_mode"] = "default"
-        let data = try JSONSerialization.data(withJSONObject: body)
-        XCTAssertNil(PermissionHookClient.tagged(data, source: .codex),
-                     "an automatic approval must reach Codex's reviewer without waiting on the HUD or returning allow")
-        XCTAssertNotNil(PermissionHookClient.tagged(data, source: .claude), "other clients keep their own approval flow")
-
+        let automatic = try await reviewed(body)
+        XCTAssertFalse(automatic, "an automatic approval must reach Codex's reviewer without waiting on the HUD or returning allow")
         try Data(#"{"type":"turn_context","payload":{"turn_id":"turn","approvals_reviewer":"user"}}"#.utf8).write(to: transcript)
-        let tagged = try XCTUnwrap(PermissionHookClient.tagged(data, source: .codex))
-        let forwarded = try ProviderJSON.read(tagged)
-        XCTAssertEqual(forwarded[PermissionHookClient.sourceKey].stringValue, "codex")
-        XCTAssertEqual(forwarded["tool_input"], try ProviderJSON.read(data)["tool_input"],
-                       "the same permission_mode still lets the user inspect and answer a manual approval")
+        let manual = try await reviewed(body)
+        XCTAssertTrue(manual, "the same permission_mode still lets the user inspect and answer a manual approval")
     }
 
-    func testCodexReviewerBelongsToTheRequestedTurnAndUsesItsLatestContext() throws {
+    func testCodexReviewerBelongsToTheRequestedTurnAndUsesItsLatestContext() async throws {
         let transcript = try directory().appendingPathComponent("rollout.jsonl")
         func write(_ contexts: [(String, String?)]) throws {
             let lines = try contexts.map { turn, reviewer -> String in
@@ -325,25 +338,114 @@ final class PermissionHookTests: XCTestCase, @unchecked Sendable {
         var body = payload()
         body["turn_id"] = "current"
         body["transcript_path"] = transcript.path
-        func forwarded() throws -> Data? {
-            PermissionHookClient.tagged(try JSONSerialization.data(withJSONObject: body), source: .codex)
+        func user(_ contexts: [(String, String?)]) async throws -> Bool {
+            try write(contexts)
+            return try await reviewed(body)
         }
 
-        try write([("older", "user"), ("current", "auto_review")])
-        XCTAssertNil(try forwarded(), "an older manual turn cannot make this automatic turn wait for a user")
-        try write([("current", "user"), ("other", "auto_review")])
-        XCTAssertNotNil(try forwarded(), "a different turn's reviewer must not hide this turn's manual approval")
-        try write([("current", "user"), ("current", "auto_review")])
-        XCTAssertNil(try forwarded(), "the last matching context takes precedence")
-        try write([("current", "auto_review"), ("current", "user")])
-        XCTAssertNotNil(try forwarded(), "a later manual context restores HUD approval")
-        try write([("current", "user"), ("current", nil)])
-        XCTAssertNil(try forwarded(), "a context with no reviewer must not reuse an earlier decision")
-        try write([("older", "user")])
-        XCTAssertNil(try forwarded(), "without this turn's context Codex keeps ownership of the request")
+        var answer = try await user([("older", "user"), ("current", "auto_review")])
+        XCTAssertFalse(answer, "an older manual turn cannot make this automatic turn wait for a user")
+        answer = try await user([("current", "user"), ("other", "auto_review")])
+        XCTAssertTrue(answer, "a different turn's reviewer must not hide this turn's manual approval")
+        answer = try await user([("current", "user"), ("current", "auto_review")])
+        XCTAssertFalse(answer, "the last matching context takes precedence")
+        answer = try await user([("current", "auto_review"), ("current", "user")])
+        XCTAssertTrue(answer, "a later manual context restores HUD approval")
+        answer = try await user([("current", "user"), ("current", nil)])
+        XCTAssertFalse(answer, "a context with no reviewer must not reuse an earlier decision")
+        answer = try await user([("older", "user")])
+        XCTAssertFalse(answer, "without this turn's context Codex keeps ownership of the request")
     }
 
-    func testAnUnknownCodexReviewerLeavesApprovalToCodex() throws {
+    func testCodexReviewerIsFoundFromTheEndOfALogOfAnyLength() async throws {
+        // Longer than a log may be read from its start: a conversation's screenshots take a log there within days.
+        let transcript = try directory().appendingPathComponent("rollout.jsonl")
+        FileManager.default.createFile(atPath: transcript.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: transcript)
+        try handle.truncate(atOffset: UInt64(ProviderFiles.linesLimit) + 1024 * 1024)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(("\n" + #"{"type":"turn_context","payload":{"turn_id":"turn","approvals_reviewer":"user"}}"#
+            + "\n" + #"{"type":"response_item","payload":{"type":"message"}}"# + "\n").utf8))
+        try handle.close()
+        var body = payload()
+        body["turn_id"] = "turn"
+        body["transcript_path"] = transcript.path
+        let started = Date()
+        let answer = try await reviewed(body)
+        XCTAssertTrue(answer, "the turn's own context is near the end, whatever the conversation before it weighs")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1, "a request waits on its own turn's lines only")
+    }
+
+    func testWhoReviewsACodexTurnIsAnsweredFromWhatTheAppAlreadyFollows() async throws {
+        // The log says one thing in each case, and is not asked: nothing of the session is read for a turn already known.
+        let transcript = try directory().appendingPathComponent("rollout.jsonl")
+        try Data(#"{"type":"turn_context","payload":{"turn_id":"turn","approvals_reviewer":"user"}}"#.utf8).write(to: transcript)
+        var body = payload(session: "thread")
+        body["turn_id"] = "turn"
+        body["transcript_path"] = transcript.path
+        func followed(_ params: JSONValue?, turn: String = "turn") -> @Sendable (String) -> JSONValue? {
+            { thread in
+                guard thread == "thread" else { return nil }
+                var entry: [String: JSONValue] = ["turnId": .string(turn), "status": .string("inProgress")]
+                entry["params"] = params
+                return .object(["turns": .array([.object(entry)])])
+            }
+        }
+        var answer = try await reviewed(body, thread: followed(.object(["approvalsReviewer": .string("auto_review")])))
+        XCTAssertFalse(answer, "a Desktop thread the app follows says who reviews each of its turns")
+        answer = try await reviewed(body, thread: followed(.object(["approvalPolicy": .string("on-request")])))
+        XCTAssertFalse(answer, "a turn whose settings name no reviewer is not the user's")
+        answer = try await reviewed(body, thread: followed(.object(["approvalsReviewer": .string("auto_review")]), turn: "another"))
+        XCTAssertTrue(answer, "a thread that does not hold the turn says nothing of it")
+        answer = try await reviewed(body, thread: followed(nil))
+        XCTAssertTrue(answer, "nor does a turn held without its settings")
+
+        let reviewers = CodexTurnReviewers()
+        reviewers.note(turn: "turn", reviewer: "auto_review")
+        answer = try await reviewed(body, reviewers: reviewers)
+        XCTAssertFalse(answer, "the log reader met the turn's context as the turn began, and it is remembered")
+        reviewers.note(turn: "turn", reviewer: nil)
+        answer = try await reviewed(body, reviewers: reviewers)
+        XCTAssertFalse(answer, "a newer context that names no reviewer takes the earlier one's place")
+        try FileManager.default.removeItem(at: transcript)
+        reviewers.note(turn: "turn", reviewer: "user")
+        answer = try await reviewed(body, reviewers: reviewers)
+        XCTAssertTrue(answer, "a remembered turn needs no log at all")
+
+        // The reader of the logs is what remembers, and the newest turns are the ones kept.
+        var rollout = CodexTranscript()
+        let turn = "turn-\(UUID().uuidString)"
+        // A minute ago: a record older than `CodexTurnReviewers.recent` is history and is passed over.
+        let began = ISO8601DateFormatter.string(from: Date().addingTimeInterval(-60), timeZone: .gmt,
+                                                formatOptions: [.withInternetDateTime, .withFractionalSeconds])
+        rollout.ingest(Data(#"{"timestamp":"\#(began)","type":"turn_context","payload":{"turn_id":"\#(turn)","approvals_reviewer":"user","model":"gpt"}}"#.utf8))
+        XCTAssertEqual(CodexTurnReviewers.shared.reviewer(of: turn), .some("user"))
+        XCTAssertNil(CodexTurnReviewers.shared.reviewer(of: "turn-never-read"))
+        let now = Date()
+        let kept = CodexTurnReviewers()
+        kept.note(turn: "oldest", reviewer: "user", at: now.addingTimeInterval(-3600), now: now)
+        for index in 0..<CodexTurnReviewers.limit {
+            kept.note(turn: "later-\(index)", reviewer: "user", at: now.addingTimeInterval(Double(index - CodexTurnReviewers.limit)), now: now)
+        }
+        XCTAssertNil(kept.reviewer(of: "oldest"), "past the limit, the turn with the oldest record makes room")
+        XCTAssertEqual(kept.reviewer(of: "later-0"), .some("user"))
+
+        // History read back after the newest turns: a record keeps its place by its own time, not by when it was read.
+        let history = CodexTurnReviewers()
+        history.note(turn: "current", reviewer: "user", at: now.addingTimeInterval(-60), now: now)
+        history.note(turn: "current", reviewer: "auto_review", at: now.addingTimeInterval(-600), now: now)
+        XCTAssertEqual(history.reviewer(of: "current"), .some("user"), "an older record of the turn does not take the newer one's place")
+        history.note(turn: "current", reviewer: nil, at: now.addingTimeInterval(-30), now: now)
+        XCTAssertEqual(history.reviewer(of: "current"), .some(nil), "a newer one does, a record naming no reviewer included")
+        history.note(turn: "last-week", reviewer: "user", at: now.addingTimeInterval(-7 * 86_400), now: now)
+        XCTAssertNil(history.reviewer(of: "last-week"), "a turn that began long ago is history, and asks for no approval now")
+        for index in 0..<(CodexTurnReviewers.limit * 2) {
+            history.note(turn: "old-\(index)", reviewer: "auto_review", at: now.addingTimeInterval(-2 * 86_400), now: now)
+        }
+        XCTAssertEqual(history.reviewer(of: "current"), .some(nil), "however much history is read, the current turns stay")
+    }
+
+    func testAnUnknownCodexReviewerLeavesApprovalToCodex() async throws {
         let transcript = try directory().appendingPathComponent("rollout.jsonl")
         var body = payload()
         body["turn_id"] = "turn"
@@ -351,16 +453,52 @@ final class PermissionHookTests: XCTestCase, @unchecked Sendable {
         for record in ["", "not JSON", #"{"type":"turn_context","payload":{"turn_id":"turn"}}"#,
                        #"{"type":"turn_context","payload":{"turn_id":"turn","approvals_reviewer":"future_reviewer"}}"#] {
             try Data(record.utf8).write(to: transcript)
-            XCTAssertNil(PermissionHookClient.tagged(try JSONSerialization.data(withJSONObject: body), source: .codex))
+            let answer = try await reviewed(body)
+            XCTAssertFalse(answer, record)
         }
         try FileManager.default.removeItem(at: transcript)
-        XCTAssertNil(PermissionHookClient.tagged(try JSONSerialization.data(withJSONObject: body), source: .codex),
-                     "an unreadable transcript must return without connecting to the HUD")
+        var answer = try await reviewed(body)
+        XCTAssertFalse(answer, "an unreadable transcript leaves the request with Codex")
         body.removeValue(forKey: "transcript_path")
-        XCTAssertNil(PermissionHookClient.tagged(try JSONSerialization.data(withJSONObject: body), source: .codex))
+        answer = try await reviewed(body)
+        XCTAssertFalse(answer)
         body["transcript_path"] = transcript.path
         body.removeValue(forKey: "turn_id")
-        XCTAssertNil(PermissionHookClient.tagged(try JSONSerialization.data(withJSONObject: body), source: .codex))
+        answer = try await reviewed(body)
+        XCTAssertFalse(answer)
+    }
+
+    @MainActor
+    func testACodexRequestForATurnItsUserDoesNotReviewIsLetGoAtOnce() async throws {
+        let path = try directory().appendingPathComponent("permission.sock").path
+        let requests = PermissionRequests.shared
+        let standard = requests.codexReviewer
+        requests.start(path: path)
+        addTeardownBlock { Task { @MainActor in requests.codexReviewer = standard; requests.stop() } }
+
+        requests.codexReviewer = { _ in false }
+        let automatic = try await ask(path, payload(session: "codex-auto"), source: .codex)
+        // The HUD decides on the main actor, so the test waits without blocking it.
+        var buffer = [UInt8](repeating: 0, count: 64), read = -1
+        for _ in 0..<300 {
+            read = recv(automatic, &buffer, buffer.count, MSG_DONTWAIT)
+            if read >= 0 || (errno != EAGAIN && errno != EWOULDBLOCK) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(read, 0, "no answer and no wait: Codex goes on to its own review")
+        close(automatic)
+        XCTAssertTrue(requests.pending.isEmpty, "nothing was shown for it")
+
+        requests.codexReviewer = { payload in payload["session_id"].stringValue == "codex-user" }
+        let manual = try await ask(path, payload(session: "codex-user"), source: .codex)
+        try await waitForPending(1, "a turn the user reviews shows its request")
+        XCTAssertEqual(requests.pending.first?.sessionID, "codex-user")
+        close(manual)
+        try await waitForPending(0, "and takes it away with the client that asked")
+        // Other clients' requests are not Codex's to gate.
+        let other = try await ask(path, payload(session: "claude"))
+        try await waitForPending(1, "a client that names its own reviewer is shown at once")
+        close(other)
     }
 
     func testCodeBuddyAndWorkBuddyAnswerOnceWithoutRuleUpdates() throws {
@@ -804,6 +942,9 @@ final class PermissionHookTests: XCTestCase, @unchecked Sendable {
         try await waitForPending(0, "a request nobody is waiting for is no longer a question")
 
         // Both Codex clients use the same source; answering one must leave the other client waiting.
+        let standard = requests.codexReviewer
+        requests.codexReviewer = { _ in true }
+        addTeardownBlock { Task { @MainActor in requests.codexReviewer = standard } }
         let cli = try await ask(path, payload(session: "codex-cli"), source: .codex)
         let desktop = try await ask(path, payload(session: "codex-desktop", tool: "apply_patch",
                                                  input: ["command": "*** Begin Patch\n*** End Patch"]), source: .codex)

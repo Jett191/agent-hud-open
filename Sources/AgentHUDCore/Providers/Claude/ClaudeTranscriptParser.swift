@@ -53,6 +53,7 @@ public enum ClaudeTranscriptParser {
             isSidechain: object["isSidechain"] as? Bool ?? false,
             isPrompt: role == .user && !isMeta && !isToolResult && !isSummary && !isLocalCommand(text),
             isCompaction: object["type"] as? String == "system" && object["subtype"] as? String == "compact_boundary",
+            isStop: object["type"] as? String == "system" && ["stop_hook_summary", "turn_duration"].contains(object["subtype"] as? String),
             entrypoint: object["entrypoint"] as? String,
             returnsStructuredOutput: calls.contains { $0["type"] as? String == "tool_use" && $0["name"] as? String == "StructuredOutput" }
         )

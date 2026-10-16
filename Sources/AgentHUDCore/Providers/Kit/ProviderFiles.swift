@@ -52,6 +52,61 @@ enum ProviderFiles {
         if !skipping, !carry.isEmpty, wanted(carry), let value = try? ProviderJSON.read(carry) { try consume(value, ordinal + 1) }
     }
 
+    /// Decodes the lines holding `marker` from the end of a JSON Lines file back, newest first, until `consume` returns
+    /// false. Only as much of the file is read as that takes: a reader after a recent line of a long log passes none of
+    /// what came before it. A line longer than `jsonLimit`, and one that is no JSON such as a tail still being written,
+    /// is passed over; reading back further than `linesLimit`, or for longer than `linesTime`, throws.
+    static func linesFromEnd(_ url: URL, marker: Data, consume: (ProviderJSON) throws -> Bool) throws {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let newline = Data([10])
+        let deadline = Date().addingTimeInterval(linesTime)
+        var position = try handle.seekToEnd(), read = 0
+        // What has been read of the line whose start is still to come, the piece read last standing first in the
+        // file; nil once that line proved too long to keep.
+        var pieces: [Data]? = [], held = 0
+        /// Whether the reader wants more after this line, which is decoded when it holds the marker.
+        func more(after line: Data) throws -> Bool {
+            guard line.count <= jsonLimit, line.range(of: marker) != nil, let value = try? ProviderJSON.read(line) else { return true }
+            return try consume(value)
+        }
+        /// The line that `start` begins and the kept pieces continue; nil when it was too long to keep.
+        func joined(_ start: Data) -> Data? {
+            guard let kept = pieces, start.count + held <= jsonLimit else { return nil }
+            return kept.reversed().reduce(into: start) { $0.append($1) }
+        }
+        while position > 0 {
+            try Task.checkCancellation()
+            let count = min(UInt64(chunk), position)
+            position -= count
+            read += Int(count)
+            guard read <= linesLimit, Date() <= deadline else { throw ProviderFailure.limit }
+            try handle.seek(toOffset: position)
+            guard let block = try handle.read(upToCount: Int(count)), block.count == Int(count) else {
+                throw CocoaError(.fileReadUnknown)
+            }
+            guard let last = block.range(of: newline, options: .backwards), let first = block.range(of: newline) else {
+                // The block lies inside one line.
+                held += block.count
+                if held > jsonLimit { pieces = nil } else { pieces?.append(block) }
+                continue
+            }
+            // Newest first: the line the block's end begins, the lines whole inside it, and its start for later.
+            if let line = joined(Data(block[last.upperBound...])) { guard try more(after: line) else { return } }
+            var end = last.lowerBound
+            while end > first.upperBound, let hit = block.range(of: marker, options: .backwards, in: first.upperBound..<end) {
+                let start = block.range(of: newline, options: .backwards, in: first.upperBound..<hit.lowerBound)?.upperBound ?? first.upperBound
+                let stop = block.range(of: newline, in: hit.upperBound..<end)?.lowerBound ?? end
+                guard try more(after: Data(block[start..<stop])) else { return }
+                end = start
+            }
+            pieces = [Data(block[..<first.lowerBound])]
+            held = first.lowerBound - block.startIndex
+        }
+        // What is left begins the file: its first line.
+        if let line = joined(Data()) { _ = try more(after: line) }
+    }
+
     /// The last `bytes` of the file open in `handle`, from the first line that starts inside them, since a read that
     /// starts inside a line cannot parse it; `handle` is left at the end of the file.
     static func tail(_ handle: FileHandle, bytes: UInt64) throws -> Data {

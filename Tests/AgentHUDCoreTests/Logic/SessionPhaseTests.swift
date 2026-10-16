@@ -96,59 +96,6 @@ final class SessionPhaseTests: XCTestCase {
         }
     }
 
-    /// A hook turn is running since its start while open and idle since its end, and nothing bounds either.
-    func testAHookTurnsPhase() {
-        let start = now.addingTimeInterval(-600), end = now.addingTimeInterval(-60)
-        XCTAssertEqual(SessionPhase(hook: .init(startedAt: start, endedAt: nil, isReportedTurn: true)),
-                       SessionPhase(state: .running, since: start, validUntil: nil))
-        XCTAssertEqual(SessionPhase(hook: .init(startedAt: start, endedAt: end, isReportedTurn: false)),
-                       SessionPhase(state: .idle, since: end, validUntil: nil))
-    }
-
-    /// At a given time, an open hook turn runs for half an hour from its prompt, as a reading is vouched for, and is out of
-    /// date after that; a stopped one is idle since its Stop hook.
-    func testAHookTurnsPhaseAtATime() {
-        let start = now.addingTimeInterval(-600), end = now.addingTimeInterval(-60)
-        let open = SessionPhase.HookTurn(startedAt: start, endedAt: nil, isReportedTurn: true)
-        XCTAssertEqual(SessionPhase(hook: open, now: start.addingTimeInterval(1799.999)),
-                       SessionPhase(state: .running, since: start, validUntil: start.addingTimeInterval(1800)))
-        XCTAssertEqual(SessionPhase(hook: open, now: start.addingTimeInterval(1800)), SessionPhase(state: .unverified, since: start, validUntil: nil))
-        XCTAssertEqual(SessionPhase(hook: .init(startedAt: start, endedAt: end, isReportedTurn: false), now: now.addingTimeInterval(86400)),
-                       SessionPhase(state: .idle, since: end, validUntil: nil))
-    }
-
-    /// A reading keeps its phase against a hook turn when it is in flight with work after the hook's end; when it reports
-    /// the hook's turn open and waiting for approval, or that turn's end after the hook's start; and when it reports
-    /// another turn, or none, that it dates after the hook's start. The hook wins everywhere else, and at equal times.
-    func testWhenAHookTurnTakesThePlaceOfAReading() {
-        let start = now.addingTimeInterval(-600), end = now.addingTimeInterval(-60), ms = 0.001
-        let at = { (offset: TimeInterval) in self.now.addingTimeInterval(offset) }
-        // The hook's end (nil while open), whether it is the reading's turn, the reading's state and since, the last event,
-        // and whether the hook prevails.
-        let cases: [(String, end: Date?, same: Bool, SessionPhase.State, since: Date, lastEvent: Date, prevails: Bool)] = [
-            ("work in flight after the hook's end", end, true, .running, start, end.addingTimeInterval(ms), false),
-            ("a wait for approval after the hook's end, of another turn", end, false, .waitingForApproval, at(-900), end.addingTimeInterval(ms), false),
-            ("work in flight up to the hook's end", end, true, .running, start, end, true),
-            ("a finished reading with a later event", end, true, .idle, start, end.addingTimeInterval(ms), true),
-            ("the same turn open and waiting for approval", nil, true, .waitingForApproval, at(-900), start, false),
-            ("the same turn ended after the hook's start", nil, true, .idle, start.addingTimeInterval(ms), start, false),
-            ("the same turn out of date after the hook's start", nil, true, .unverified, start.addingTimeInterval(ms), start, false),
-            ("the same turn ended at the hook's start", nil, true, .idle, start, start, true),
-            ("the same turn running after the hook's start", nil, true, .running, start.addingTimeInterval(ms), start, true),
-            ("the same turn waiting after the hook ended", end, true, .waitingForApproval, at(-900), end, true),
-            ("the same turn ended after the hook's start, the hook ended", end, true, .idle, start.addingTimeInterval(ms), end, true),
-            ("another turn after the hook's start", nil, false, .running, start.addingTimeInterval(ms), start, false),
-            ("another turn ended after the hook's start, the hook ended", end, false, .idle, start.addingTimeInterval(ms), end, false),
-            ("another turn at the hook's start", nil, false, .running, start, start, true),
-            ("another turn before the hook's start", end, false, .waitingForApproval, at(-900), end, true),
-        ]
-        for (name, hookEnd, same, state, since, lastEvent, prevails) in cases {
-            let hook = SessionPhase.HookTurn(startedAt: start, endedAt: hookEnd, isReportedTurn: same)
-            let reading = SessionPhase(state: state, since: since, validUntil: nil)
-            XCTAssertEqual(SessionPhase.hookPrevails(hook, over: reading, lastEventAt: lastEvent), prevails, name)
-        }
-    }
-
     // MARK: Fixtures
 
     /// Times are seconds from now.

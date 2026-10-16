@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 
 enum DeepSeekRuntime {
-    /// Inspect the Node processes holding this Harness home's profile files, without reading credentials.
+    /// Inspect the Harness processes holding this Harness home's profile files, without reading credentials.
     static func processStarts(directory: URL) async -> [Date] {
         await Task.detached(priority: .utility) {
             let profiles = directory.appendingPathComponent("profiles")
@@ -20,10 +20,16 @@ enum DeepSeekRuntime {
                 var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
                 guard proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { return nil }
                 let executable = String(decoding: path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
-                guard URL(fileURLWithPath: executable).lastPathComponent == "node" else { return nil }
+                guard isHarness(executable: executable) else { return nil }
                 return Date(timeIntervalSince1970: Double(info.pbi_start_tvsec) + Double(info.pbi_start_tvusec) / 1_000_000)
             }
         }.value
+    }
+
+    /// A command-line Harness runs on Node. The desktop app runs its Host, which holds `profiles/desktop/cordis.yml`, and
+    /// the `dsh` command it installs on its own Electron in Node mode, whose executable is named after the app.
+    static func isHarness(executable: String) -> Bool {
+        ["node", DeepSeekScriptRuntime.desktopName].contains(URL(fileURLWithPath: executable).lastPathComponent)
     }
 
     static func processIDs(_ output: String) -> Set<Int32> {

@@ -220,6 +220,38 @@ final class UsageLedgerTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(usage.turns.map(\.compacted), [false, true, false])
     }
 
+    func testRecachedBucketsCountEveryMarkedLogAndFollowItsWrites() async throws {
+        let ledger = UsageLedger.inMemory()
+        try await ledger.write { writer in
+            try writer.upsert(source: "claude", contribution: "p/r.jsonl", events: [
+                self.call("r1", 1, input: 1_000, write: 1_000, output: 10),
+                self.call("r2", 2, input: 200, write: 200, output: 10, cache: 1_000),
+                self.call("r3", 70, input: 1_300, write: 1_250, output: 10),
+                self.call("r4", 71, input: 100, write: 100, output: 10, cache: 1_300),
+                self.call("r5", 72, input: 300, write: 300, output: 10),
+                self.call("r6", 90, agent: "claude-model:claude-sonnet-5", input: 700, write: 700, output: 10),
+            ])
+            try writer.addMarks(source: "claude", contribution: "p/r.jsonl", marks: [
+                .init(.prompt, at: self.at(60)), .init(.prompt, at: self.at(70 * 60)), .init(.compaction, at: self.at(71.5 * 60)),
+                .init(.prompt, at: self.at(90 * 60)),
+            ])
+            // A log that marks no prompts, such as a sub-agent's, is not a session's own log of every call.
+            try writer.upsert(source: "claude", contribution: "p/r/subagents/agent-a.jsonl", events: [
+                self.call("a1", 1, input: 1_000, output: 10), self.call("a2", 70, input: 1_000, output: 10),
+            ])
+        }
+        func sent(_ buckets: [UsageBucket]) -> [String] {
+            buckets.map { "\(Int($0.start.timeIntervalSince(base)))s \($0.agentId) \($0.kinds.cacheWrite)w \($0.kinds.input)i" }
+        }
+        let first = try await ledger.recachedBuckets(since: base)
+        XCTAssertEqual(sent(first), ["3600s claude-model:claude-opus-5 1300w 0i", "5400s claude-model:claude-sonnet-5 700w 0i"],
+                       "the same calls a session's turns count, by the period and model of each")
+        try await ledger.write { try $0.upsert(source: "claude", contribution: "p/r.jsonl", events: [self.call("r7", 200, input: 2_000, output: 10)]) }
+        let second = try await ledger.recachedBuckets(since: base.addingTimeInterval(5_000))
+        XCTAssertEqual(sent(second), ["5400s claude-model:claude-sonnet-5 700w 0i", "11700s claude-model:claude-opus-5 0w 2000i"],
+                       "a log written since is read again, and periods before `since` are left out")
+    }
+
     func testTurnCallsListATurnsCallsWithTheirContextCacheAndPrice() async throws {
         let ledger = UsageLedger.inMemory()
         try await ledger.write { writer in

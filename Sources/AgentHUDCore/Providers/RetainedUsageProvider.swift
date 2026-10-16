@@ -63,7 +63,7 @@ extension UsageReport {
                     codexResetCredits: codexResetCredits,
                     codexResetCreditsObservedAt: codexResetCreditsObservedAt, services: services, activeQuotaPoolIDs: activeQuotaPoolIDs,
                     accounts: accounts, forgottenAccountProviders: forgottenAccountProviders, periods: periods,
-                    rowSeenAt: rowSeenAt)
+                    recached: recached, rowSeenAt: rowSeenAt)
     }
 
     /// The first report of a run with nothing kept from before: every row it lists was seen now.
@@ -75,7 +75,7 @@ extension UsageReport {
                     codexResetCreditsObservedAt: codexResetCreditsObservedAt, completions: completions, turns: turns,
                     services: services, activeQuotaPoolIDs: activeQuotaPoolIDs, accounts: accounts,
                     forgottenAccountProviders: forgottenAccountProviders, sessionUsage: sessionUsage, periods: periods,
-                    rowSeenAt: Dictionary(discoveredAgents.map { ($0.id, generatedAt) }, uniquingKeysWith: { first, _ in first }))
+                    recached: recached, rowSeenAt: Dictionary(discoveredAgents.map { ($0.id, generatedAt) }, uniquingKeysWith: { first, _ in first }))
     }
 
     /// An absent reading is not a zero or a confirmed reset. Keep its original observation time.
@@ -161,7 +161,7 @@ extension UsageReport {
             accounts: accounts,
             sessionUsage: Self.retainedSessionUsage(sessionUsage, previous: previous.sessionUsage, sessions: retainedSessions),
             // Like `usage`, the periods come from the ledger, which keeps what a failed refresh recorded before.
-            periods: periods,
+            periods: periods, recached: recached,
             rowSeenAt: Dictionary(rows.map { ($0.id, seen[$0.id] ?? generatedAt) }, uniquingKeysWith: { first, _ in first }))
     }
 

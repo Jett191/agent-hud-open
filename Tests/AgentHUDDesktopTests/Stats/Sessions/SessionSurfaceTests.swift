@@ -175,7 +175,7 @@ final class SessionSurfaceTests: XCTestCase {
         show(running + ended,
              turns: [turn("running-7", .waitingForApproval, started: -600, observed: -100)], in: store)
         let rows = HoverPanelView.sessionRows(store)
-        XCTAssertEqual(rows.shown.count, HoverPanelView.sessionRowLimit)
+        XCTAssertEqual(rows.shown.count, PanelLayout.Sessions.defaultLimit)
         XCTAssertEqual(rows.shown.map(\.id), ["running-7", "running-0", "running-1", "running-2", "running-3"])
         XCTAssertEqual(rows.more, running.count + ended.count - rows.shown.count)
         XCTAssertEqual(rows.running.count, 8)

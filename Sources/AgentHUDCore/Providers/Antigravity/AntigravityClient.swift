@@ -3,6 +3,7 @@ import Foundation
 // Local service discovery and quota schema follow CodexBar (MIT). Only already-running services are queried.
 struct AntigravityClient: Sendable {
     var http = ProviderHTTP()
+    var cli = AntigravityCLI()
     private static let statusRequest: ProviderJSON = .object(["metadata": .object([
         "ideName": .string("antigravity"), "extensionName": .string("antigravity"), "locale": .string("en"), "ideVersion": .string("unknown")
     ])])
@@ -31,6 +32,14 @@ struct AntigravityClient: Sendable {
             }
         }
         if let fallback { return fallback }
+        // agy alone runs no server this app holds a token for; it prints the same summary, without naming the account.
+        if let agy = AntigravityCLI.executable(of: candidates) {
+            do { return try await cli.quota(executable: agy) }
+            catch {
+                try Task.checkCancellation()
+                throw UsageProviderError(L10n.text("agy 正在运行，但读取不到它的额度", "agy is running, but its quota could not be read"))
+            }
+        }
         throw UsageProviderError(L10n.text("Antigravity 本地服务未返回可读取的额度", "Antigravity's local service returned no readable quota"))
     }
 

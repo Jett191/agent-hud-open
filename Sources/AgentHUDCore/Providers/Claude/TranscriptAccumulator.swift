@@ -117,6 +117,11 @@ public struct TranscriptAccumulator: Hashable, Sendable, Codable {
                         // Stop hook's feedback. The turn that stopped is being worked on again.
                         currentTurn?.state = .running
                     }
+                } else if event.isStop, currentTurn?.state == .running, event.timestamp >= currentTurn!.observedAt {
+                    // Claude Code ran the Stop hooks or timed the turn once the agent stopped: a turn no end_turn
+                    // completed, such as one whose answer was cut off or failed, is over as well.
+                    currentTurn = Turn(startedAt: currentTurn?.startedAt, state: .completed, observedAt: event.timestamp,
+                                       message: currentTurn?.message)
                 }
                 // Only the conversation dates a running turn. An attachment or queue record can carry a later time than
                 // the answer written after it, which would then look older than the turn and leave it running.
@@ -137,6 +142,9 @@ public struct TranscriptAccumulator: Hashable, Sendable, Codable {
                 recentUsageKeys.append(usageKey)
                 if recentUsageKeys.count > Self.retainedUsageKeys { recentUsageKeys.removeFirst(recentUsageKeys.count - Self.retainedUsageKeys) }
                 key = usageKey
+            } else if let offset = event.offset {
+                // Without a response id, the line's place in its log keys it, whichever page is read first.
+                key = "o:\(offset)"
             } else {
                 unkeyedUsage += 1
                 key = "n:\(unkeyedUsage)"
@@ -158,6 +166,42 @@ public struct TranscriptAccumulator: Hashable, Sendable, Codable {
     }
 
     public var isEmpty: Bool { startedAt == nil }
+
+    /// Takes what a log's first lines say about its session: its id, folder, surface and start, and its first prompt as
+    /// the title, counting none of their usage. A page of history read later carries these before its own lines.
+    public mutating func readHead(_ events: [TranscriptEvent]) {
+        let own = ownSession
+        for event in events where own == nil || event.sessionId == nil || event.sessionId == own {
+            if sessionId == nil { sessionId = event.sessionId }
+            if cwd == nil { cwd = event.cwd }
+            if entrypoint == nil { entrypoint = event.entrypoint }
+            startedAt = min(startedAt ?? event.timestamp, event.timestamp)
+            if task == nil, event.role == .user, let text = event.text { task = SessionTitle.from(text) }
+        }
+    }
+
+    /// Takes in what an older page of the same log read: its counts add up, its first prompt names the session, and the
+    /// newest turn, titles and recent completions stay this summary's own where it has them.
+    public mutating func merge(older: TranscriptAccumulator) {
+        sessionId = sessionId ?? older.sessionId
+        cwd = cwd ?? older.cwd
+        entrypoint = entrypoint ?? older.entrypoint
+        startedAt = [startedAt, older.startedAt].compactMap { $0 }.min()
+        lastActivityAt = [lastActivityAt, older.lastActivityAt].compactMap { $0 }.max()
+        task = older.task ?? task
+        customTitle = customTitle ?? older.customTitle
+        generatedTitle = generatedTitle ?? older.generatedTitle
+        tokensIn += older.tokensIn
+        tokensOut += older.tokensOut
+        cacheReadTokens += older.cacheReadTokens
+        outputByAgent.merge(older.outputByAgent, uniquingKeysWith: +)
+        modelsSeen.merge(older.modelsSeen) { max($0, $1) }
+        currentTurn = currentTurn ?? older.currentTurn
+        if let earlier = older.completions {
+            let ids = Set((completions ?? []).map(\.id))
+            completions = Array((earlier.filter { !ids.contains($0.id) } + (completions ?? [])).suffix(Self.retainedCompletions))
+        }
+    }
 
     /// Hands over the prompts and compactions read since the last call.
     public mutating func drainMarks() -> [UsageLedger.Mark] {

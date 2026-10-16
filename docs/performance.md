@@ -67,10 +67,15 @@ grouped by the application's own functions, shows which part is paying; a mean a
 - A dock of logos runs no timer. A bot asks for a frame only as often as its motion shows: 30 a second for a morph,
   an act or a blink, 15 while its eyes follow the pointer, 10 for a breath, and none until its next visit while it
   waits as its logo. Its frames are drawn in the display's colours and byte order; a layer given any other picture
-  converts it on every commit, which cost as much as drawing it.
+  converts it on every commit, which cost as much as drawing it. A bot that does not spin starts each frame from a
+  kept copy of its body, and a bot's hairline is laid by Accelerate when that matches Core Graphics byte for byte,
+  which is checked once per colour space. `BotFrameTests` holds those frames to the ones drawn whole and to the
+  outline and hairline as they were drawn before, byte for byte; `scripts/bot-frame-golden.sh` compares every frame
+  with an earlier commit's, and `AGENT_HUD_BENCH_BOTS=1 swift test --filter BotFrameTests` times a frame.
 - The Antigravity and DeepSeek observers poll their client's local service every two seconds, and look for that
   service in the process list at most every ten. A listing is half a megabyte on a busy Mac and is searched, not
-  split into lines.
+  split into lines. A Mac without the client takes no listing: Antigravity is looked for only while one of its apps,
+  or a folder it or agy keeps its data in, exists, and Harness only while its home holds profiles or sessions.
 
 ## 2026-10-11 local validation
 

@@ -13,6 +13,10 @@ public final class PermissionRequests {
 
     /// In arrival order. Two sessions can be waiting at once, and parallel tool calls in one session can be too.
     public private(set) var pending: [PermissionRequest] = []
+    /// Sessions whose client says it waits on its user, by session id, with when that was first seen: whatever it asked,
+    /// a card on the HUD or not. A client's own account, from a channel that follows it, never a guess.
+    public var waitingSessions: [String: Date] { sessionsWaiting.values.reduce(into: [:]) { $0.merge($1) { min($0, $1) } } }
+    private var sessionsWaiting: [PermissionHooks.Source: [String: Date]] = [:]
 
     private enum Waiting {
         case hook(NWConnection)
@@ -32,6 +36,9 @@ public final class PermissionRequests {
     }
     @ObservationIgnored private var channel: UnixSocketListener?
     @ObservationIgnored private var counter: UInt64 = 0
+    /// Whether the user reviews the turn a Codex request belongs to. Codex asks its hook before choosing between the
+    /// user and its automatic review, so a request for any other turn is let go at once, back to Codex's own flow.
+    @ObservationIgnored var codexReviewer: @Sendable (JSONValue) async -> Bool = { await CodexPermissionReviewer.isUser(payload: $0) }
 
     init() {}
 
@@ -65,6 +72,20 @@ public final class PermissionRequests {
     private func register(_ data: Data, connection: NWConnection) {
         // The hook names its own client; a payload that arrives on this socket without one cannot be placed.
         guard let source = source(of: data), source.usesHook else { return connection.cancel() }
+        guard source == .codex else { return present(data, source: source, connection: connection) }
+        let payload = (try? ProviderJSON.read(data)) ?? .null, reviewer = codexReviewer
+        Task { [weak self] in
+            guard await reviewer(payload), let self else { return connection.cancel() }
+            present(data, source: source, connection: connection)
+        }
+    }
+
+    private func present(_ data: Data, source: PermissionHooks.Source, connection: NWConnection) {
+        // A client that gave up while its request was being placed has no question left.
+        switch connection.state {
+        case .cancelled, .failed: return
+        default: break
+        }
         counter &+= 1
         let id = "\(source.rawValue)-\(counter)"
         guard let request = try? PermissionRequest.parse(data, source: source, id: id, now: Date()) else {
@@ -117,6 +138,15 @@ public final class PermissionRequests {
         }
     }
 
+    /// The sessions of `source` whose client says, at this moment, that it waits on its user. A session that stays keeps
+    /// the time it was first seen; one that left is no longer waiting.
+    func updateWaitingSessions(_ sessions: Set<String>, source: PermissionHooks.Source, now: Date = Date()) {
+        let earlier = sessionsWaiting[source] ?? [:]
+        let current = Dictionary(uniqueKeysWithValues: sessions.map { ($0, earlier[$0] ?? now) })
+        guard current != earlier else { return }
+        sessionsWaiting[source] = current.isEmpty ? nil : current
+    }
+
     /// An event stream settles prompts explicitly; a disconnect alone cannot clear a user's dismissal.
     func settleNativeRequest(_ id: String, source: PermissionHooks.Source) {
         if request(id)?.source == source, case .native = waiting[id] { withdraw(id) }
@@ -138,6 +168,7 @@ public final class PermissionRequests {
 
     func stopNativeRequests(source: PermissionHooks.Source) {
         removeNativeRequests(source: source)
+        updateWaitingSessions([], source: source)
         for (id, answer) in nativeAnswers where answer.source == source {
             answer.task.cancel()
             nativeAnswers.removeValue(forKey: id)

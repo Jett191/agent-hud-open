@@ -12,7 +12,9 @@ struct UsageChartsCard: View {
     }
 }
 
-/// Dashboard controls belong to its chart; HUD history always shows the latest day in quarter-hour bars.
+/// Dashboard controls belong to its chart. The HUD's history shows the latest day in quarter-hour bars, or the last 7 or
+/// 30 days in day bars, as its picker flips them: it starts from the period it is handed, its layout's, each time the
+/// panel opens, and a flip lasts until the panel closes. The bars keep one height in every period.
 struct TokenConsumptionChart: View {
     enum Context { case stats, island }
 
@@ -29,11 +31,17 @@ struct TokenConsumptionChart: View {
     let compact: Bool
     var onOpenStats: () -> Void
     private let inspectedColumnID: Date?
+    /// The island's models, as it is handed them on every pass: a model of an agent its layout or its panel names that
+    /// starts spending tokens while the panel is open joins the chart with the next report. Nil on the statistics
+    /// window, whose picker keeps its own (`modelFilter`).
+    private let handedModels: TokenModelFilter?
     @State private var modelFilter: TokenModelFilter
     @State private var modelsExpanded: Bool
+    /// The island's period, which its picker flips.
+    @State private var period: PanelTokenPeriod
 
     init(store: UsageStore, theme: Theme, context: Context, modelsExpanded: Bool = false,
-         modelFilter: TokenModelFilter = TokenModelFilter(), inspectedColumnID: Date? = nil,
+         modelFilter: TokenModelFilter = TokenModelFilter(), period: PanelTokenPeriod = .day, inspectedColumnID: Date? = nil,
          compact: Bool = false, onOpenStats: @escaping () -> Void = {}) {
         self.store = store
         self.theme = theme
@@ -41,18 +49,22 @@ struct TokenConsumptionChart: View {
         self.compact = compact
         self.onOpenStats = onOpenStats
         self.inspectedColumnID = inspectedColumnID
+        handedModels = context == .island ? modelFilter : nil
         _modelsExpanded = State(initialValue: modelsExpanded)
         _modelFilter = State(initialValue: modelFilter)
+        _period = State(initialValue: period)
     }
 
     var body: some View {
-        // The island has no filter control of its own; it is only ever handed one agent's models.
-        let consumers = store.consumers.filter { modelFilter.includes($0.id) }
-        let ids = modelFilter.consumerIDs
-        let allColumns = context == .stats ? store.tokenColumns : store.hudTokenColumns
+        // The island has no model control of its own; it is handed the models its layout and its panel's agent chart.
+        let filter = handedModels ?? modelFilter
+        let consumers = store.consumers.filter { filter.includes($0.id) }
+        let ids = filter.consumerIDs
+        let period = period
+        let allColumns = context == .stats ? store.tokenColumns : store.hudTokenColumns(consumerIDs: nil, period: period)
         let columns = ids == nil ? allColumns
-            : context == .stats ? store.tokenColumns(consumerIDs: ids) : store.hudTokenColumns(consumerIDs: ids)
-        let interval = context == .stats ? store.statsInterval : store.hudTokenInterval
+            : context == .stats ? store.tokenColumns(consumerIDs: ids) : store.hudTokenColumns(consumerIDs: ids, period: period)
+        let interval = context == .stats ? store.statsInterval : store.hudTokenInterval(period)
         let models = context == .stats ? Self.modelTotals(consumers: store.consumers, columns: allColumns) : []
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
@@ -60,8 +72,8 @@ struct TokenConsumptionChart: View {
                     .font(.ui(13, .semibold))
                 Spacer()
                 if context == .island {
-                    Text(store.report == nil ? "24h · —"
-                         : "24h · \(TokenFormat.short(columns.reduce(0) { $0 + $1.total })) tok")
+                    TokenPeriodPicker(selection: $period, theme: theme)
+                    Text(Self.total(store.report == nil ? nil : columns, period: period))
                         .font(.tabular(12))
                         .foregroundStyle(theme.secondary)
                 } else {
@@ -81,7 +93,7 @@ struct TokenConsumptionChart: View {
             if !compact, context == .stats, !models.isEmpty || !modelFilter.isAll {
                 modelPicker(models)
             } else if !compact, context == .island {
-                let legend = Self.islandLegend(consumers: store.consumers, columns: allColumns, filter: modelFilter)
+                let legend = Self.islandLegend(consumers: store.consumers, columns: allColumns, filter: filter)
                 if !legend.shown.isEmpty {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), alignment: .leading)], alignment: .leading, spacing: 6) {
                         ForEach(legend.shown) { model in
@@ -108,7 +120,7 @@ struct TokenConsumptionChart: View {
                            noModelsSelected: context == .stats && modelFilter.consumerIDs?.isEmpty == true,
                            inspectedColumnID: inspectedColumnID, compact: compact)
                 .id(context == .stats ? [store.statsRange.hours, store.tokenBucketSize.rawValue, store.tokenDimensions.rawValue]
-                                     : [24, TokenBucketSize.minutes15.rawValue, TokenDimensions.all.rawValue])
+                                     : [Int(period.duration / 3600), period.bucketSize.rawValue, TokenDimensions.all.rawValue])
                 .frame(height: compact ? 40 : (context == .island ? 72 : 100))
                 .padding(.horizontal, context == .stats ? 12 : 6)
                 .padding(.top, compact ? 8 : 12)
@@ -116,7 +128,7 @@ struct TokenConsumptionChart: View {
 
             if !compact {
                 HStack {
-                    let labels = ChartData.axisLabels(range: context == .stats ? store.statsRange : .hours24, now: store.dataDate)
+                    let labels = ChartData.axisLabels(range: context == .stats ? store.statsRange : period.range, now: store.dataDate)
                     ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
                         if index > 0 { Spacer() }
                         Text(label)
@@ -130,6 +142,13 @@ struct TokenConsumptionChart: View {
                 .padding(.horizontal, context == .stats ? 12 : 6)
             }
         }
+    }
+
+    /// What stands beside the name of an island chart: its period and the tokens its columns hold, or a dash for `nil`,
+    /// while there is no report to count from.
+    nonisolated static func total(_ columns: [TokenColumn]?, period: PanelTokenPeriod = .day) -> String {
+        guard let columns else { return "\(period.label) · —" }
+        return "\(period.label) · \(TokenFormat.short(columns.reduce(0) { $0 + $1.total })) tok"
     }
 
     nonisolated static func modelTotals(consumers: [AgentDescriptor], columns: [TokenColumn]) -> [ModelTokens] {
@@ -217,177 +236,4 @@ struct TokenConsumptionChart: View {
         .help("\(consumer.displayName): \(tokens.formatted()) tokens")
     }
 
-}
-
-/// Each column is a single stack whose height is the sum of its model segments.
-struct TokenBarsChart: View {
-    let columns: [TokenColumn]
-    let interval: DateInterval
-    let colors: [Color]
-    let consumers: [AgentDescriptor]
-    let theme: Theme
-    var isLoading = false
-    var noModelsSelected = false
-    let compact: Bool
-    @State private var hoveredID: Date?
-
-    init(columns: [TokenColumn], interval: DateInterval, colors: [Color], consumers: [AgentDescriptor], theme: Theme,
-         isLoading: Bool = false, noModelsSelected: Bool = false, inspectedColumnID: Date? = nil,
-         compact: Bool = false) {
-        self.columns = columns
-        self.interval = interval
-        self.colors = colors
-        self.consumers = consumers
-        self.theme = theme
-        self.isLoading = isLoading
-        self.noModelsSelected = noModelsSelected
-        self.compact = compact
-        _hoveredID = State(initialValue: inspectedColumnID)
-    }
-
-    private var inspectedColumn: TokenColumn? {
-        hoveredID.flatMap { id in columns.first { $0.id == id } }
-    }
-
-    /// Render complete buckets at both ends; their counts still cover only the selected range.
-    private var plotInterval: DateInterval {
-        guard let first = columns.first, let last = columns.last else { return interval }
-        return DateInterval(start: first.interval.start, end: last.interval.end)
-    }
-
-    var body: some View {
-        let peak = columns.map(\.total).max() ?? 0
-        let scale = max(1, peak)
-        let inspectedColumn = inspectedColumn
-        GeometryReader { proxy in
-            let usable = proxy.size.height - 2
-            ZStack(alignment: .bottomLeading) {
-                Rectangle().fill(theme.divider).frame(height: 1)
-                if let column = inspectedColumn {
-                    let bounds = xBounds(column, width: proxy.size.width)
-                    Rectangle().fill(theme.text.opacity(0.08))
-                        .frame(width: bounds.upperBound - bounds.lowerBound, height: usable)
-                        .offset(x: bounds.lowerBound)
-                    Rectangle().fill(theme.secondary.opacity(0.5))
-                        .frame(width: 1, height: usable)
-                        .offset(x: (bounds.lowerBound + bounds.upperBound) / 2)
-                }
-                // Draw dense ranges in one surface instead of laying out a view for every segment.
-                Canvas { context, size in
-                    for column in columns where column.total > 0 {
-                        let bounds = xBounds(column, width: size.width)
-                        let gap = min(2, (bounds.upperBound - bounds.lowerBound) * 0.2)
-                        let x = bounds.lowerBound + gap / 2
-                        let width = max(0, bounds.upperBound - bounds.lowerBound - gap)
-                        let height = CGFloat(column.total) / CGFloat(scale) * usable
-                        let stack = CGRect(x: x, y: size.height - 1 - height, width: width, height: height)
-                        var stackContext = context
-                        stackContext.clip(to: Path(roundedRect: stack, cornerRadius: 2))
-                        stackContext.opacity = inspectedColumn == nil || inspectedColumn?.id == column.id ? 1 : 0.55
-                        var bottom = size.height - 1
-                        for (index, value) in column.tokens.enumerated() where value > 0 {
-                            let segmentHeight = CGFloat(value) / CGFloat(scale) * usable
-                            bottom -= segmentHeight
-                            let segment = CGRect(x: x, y: bottom, width: width, height: segmentHeight)
-                            let color = colors.indices.contains(index) ? colors[index] : theme.secondary
-                            stackContext.fill(Path(segment), with: .color(color))
-                        }
-                    }
-                }
-                if !compact, peak > 0 || !isLoading {
-                    Text(TokenFormat.short(peak))
-                        .font(.ui(10))
-                        .foregroundStyle(theme.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                        .offset(y: -12)
-                }
-                if peak == 0 && !isLoading {
-                    Text(noModelsSelected ? L10n.text("未选择模型", "No models selected")
-                         : L10n.text("此时间窗口内没有 Token 消耗", "No token usage in this range"))
-                        .font(.ui(11))
-                        .foregroundStyle(theme.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            }
-            .contentShape(Rectangle())
-            .onContinuousHover { phase in
-                switch phase {
-                case .active(let point): hoveredID = isLoading && peak == 0 ? nil : column(at: point.x, width: proxy.size.width)?.id
-                case .ended: hoveredID = nil
-                }
-            }
-            .overlay(alignment: .bottomLeading) {
-                if let column = inspectedColumn {
-                    let width = min(280, proxy.size.width)
-                    let bounds = xBounds(column, width: proxy.size.width)
-                    let midpoint = (bounds.lowerBound + bounds.upperBound) / 2
-                    let preferred = midpoint < proxy.size.width / 2 ? midpoint + 12 : midpoint - width - 12
-                    detail(column)
-                        .frame(width: width)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .offset(x: max(0, min(preferred, proxy.size.width - width)), y: -6)
-                        .allowsHitTesting(false)
-                }
-            }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(L10n.text("Token 消耗图表", "Token consumption chart"))
-        .accessibilityValue(inspectedColumn.map(description) ?? L10n.text("悬停查看时间段", "Hover to inspect a period"))
-    }
-
-    private func xBounds(_ column: TokenColumn, width: CGFloat) -> ClosedRange<CGFloat> {
-        let left = column.interval.start.timeIntervalSince(plotInterval.start) / plotInterval.duration * width
-        let right = column.interval.end.timeIntervalSince(plotInterval.start) / plotInterval.duration * width
-        return left...right
-    }
-
-    private func column(at x: CGFloat, width: CGFloat) -> TokenColumn? {
-        guard width > 0 else { return nil }
-        let date = plotInterval.start.addingTimeInterval(max(0, min(1, x / width)) * plotInterval.duration)
-        return ChartData.tokenColumn(at: date, in: columns)
-    }
-
-    private func detail(_ column: TokenColumn) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(period(column)).font(.ui(11)).foregroundStyle(theme.secondary)
-            Text("\(column.total.formatted()) tokens").font(.tabular(14, .semibold))
-            ForEach(Array(consumers.enumerated()), id: \.element.id) { index, consumer in
-                if column.tokens.indices.contains(index), column.tokens[index] > 0 {
-                    HStack(spacing: 5) {
-                        Circle().fill(colors[index]).frame(width: 6, height: 6)
-                        AgentLogo(vendor: consumer.vendor, size: 12)
-                        Text(consumer.name).lineLimit(1)
-                        Spacer(minLength: 6)
-                        Text(column.tokens[index].formatted()).font(.tabular(11))
-                    }
-                    .font(.ui(11))
-                }
-            }
-            if column.total == 0 {
-                Text(L10n.text("此时段没有 Token 消耗", "No token usage in this period"))
-                    .font(.ui(11)).foregroundStyle(theme.secondary)
-            }
-            if column.interval.start < interval.start || column.interval.end > interval.end {
-                Text(L10n.text("仅统计所选范围内的部分时段", "Partial period within the selected range"))
-                    .font(.ui(11)).foregroundStyle(theme.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .foregroundStyle(theme.text)
-        .background(RoundedRectangle(cornerRadius: 8).fill(theme.windowBackground))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.cardBorder))
-        .shadow(color: .black.opacity(0.2), radius: 6, y: 2)
-    }
-
-    private func period(_ column: TokenColumn) -> String {
-        let start = max(column.interval.start, interval.start)
-        return ChartData.period(DateInterval(start: start, end: max(start, min(column.interval.end, interval.end))))
-    }
-
-    private func description(_ column: TokenColumn) -> String {
-        let total = L10n.text("合计 \(column.total.formatted()) tokens", "Total \(column.total.formatted()) tokens")
-        let details = zip(consumers, column.tokens).filter { $0.1 > 0 }.map { "\($0.0.displayName): \($0.1.formatted())" }
-        return ([period(column), total] + details).joined(separator: "\n")
-    }
 }

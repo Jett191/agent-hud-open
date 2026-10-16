@@ -265,6 +265,29 @@ final class OpenAgentProviderTests: XCTestCase {
         XCTAssertEqual(old.models.values.first, "Unknown")
     }
 
+    func testAMonthOfTokensListsOnlyTheWeeksSessionsTurnsAndCompletions() async throws {
+        let now = Date(timeIntervalSince1970: 1_788_800_000), ledger = UsageLedger.inMemory()
+        func session(_ name: String, daysAgo: Double) throws -> OpenAgentSession {
+            let start = Int64(now.addingTimeInterval(-daysAgo * 86400).timeIntervalSince1970 * 1000)
+            let lines = """
+            {"type":"context.append_loop_event","time":\(start),"event":{"type":"step.begin","turnId":"0","step":0}}
+            {"type":"usage.record","model":"kimi-code/kimi-for-coding","usageScope":"turn","time":\(start + 500),"usage":{"inputOther":10,"output":5}}
+            {"type":"turn.ended","turnId":0,"reason":"completed","time":\(start + 1000)}
+            """
+            return try XCTUnwrap(OpenAgentParser.kimi(Data(lines.utf8), path: "/.kimi-code/sessions/work/\(name)/agents/main/wire.jsonl").first)
+        }
+        let recent = try session("recent", daysAgo: 2), old = try session("old", daysAgo: 20)
+        XCTAssertFalse(old.completions.isEmpty, "the old session has a completion to leave out")
+        let provider = OpenAgentUsageProvider(credentials: { [] }, sessions: { _ in .init(sessions: [recent, old]) },
+                                              fetchQuota: { _, _ in ProviderQuota() }, history: QuotaHistoryStore(), clock: { now }, ledger: ledger)
+        let report = try await provider.fetchUsage(agents: [], historyHours: 31 * 24 + 25)
+        XCTAssertEqual(report.sessions.map(\.id), [recent.id])
+        XCTAssertEqual(Set(report.turns.map(\.sessionID)), [recent.id])
+        XCTAssertEqual(Set(report.completions.map(\.sessionID)), [recent.id])
+        let recorded = try await ledger.buckets(since: now.addingTimeInterval(-31 * 86400))
+        XCTAssertEqual(recorded.reduce(0) { $0 + $1.tokensIn }, 20, "both sessions' tokens are recorded")
+    }
+
     func testKimiLoopEventsReachRunningReportBeforeUsageAndRetainTurnIdentityAtEnd() async throws {
         let start: Int64 = 1_788_800_000_000
         let path = "/.kimi-code/sessions/work/session/agents/main/wire.jsonl"

@@ -84,19 +84,35 @@ public extension UsageStore {
 
     /// The latest 96 ledger quarters, including the quarter containing this reading.
     /// HUD history never reads Dashboard selections, and includes every recorded token kind.
-    var hudTokenInterval: DateInterval {
+    var hudTokenInterval: DateInterval { hudTokenInterval(.day) }
+
+    /// A period of the HUD's history: its length, ending with the quarter hour that contains this reading.
+    func hudTokenInterval(_ period: PanelTokenPeriod) -> DateInterval {
         let quarter = TokenBucketSize.minutes15.duration
         let end = Date(timeIntervalSince1970: ceil(dataDate.timeIntervalSince1970 / quarter) * quarter)
-        return DateInterval(start: end.addingTimeInterval(-24 * 3600), end: end)
+        return DateInterval(start: end.addingTimeInterval(-period.duration), end: end)
     }
 
     var hudTokenColumns: [TokenColumn] { hudTokenColumns(consumerIDs: nil) }
 
-    /// The HUD's history narrowed to some models, as one agent's own panel shows it.
-    func hudTokenColumns(consumerIDs: Set<String>?) -> [TokenColumn] {
-        let selected = consumers.filter { consumerIDs?.contains($0.id) ?? true }
-        return ChartData.tokenBars(usage: report?.usage ?? [], agentIds: selected.map(\.id), interval: hudTokenInterval,
-                                   bucketSize: .minutes15, dimensions: .all)
+    /// The HUD's history over a period, in that period's columns (`PanelTokenPeriod.bucketSize`), narrowed to some models
+    /// as one agent's own panel or a layout's agents chart it; nil for every model. Built once for each report and end
+    /// (`hudColumns(_:end:build:)`), since the panel asks for them on every pass.
+    func hudTokenColumns(consumerIDs: Set<String>?, period: PanelTokenPeriod = .day) -> [TokenColumn] {
+        let interval = hudTokenInterval(period)
+        return hudColumns(HUDColumnsKey(period: period, consumerIDs: consumerIDs), end: interval.end) {
+            let selected = consumers.filter { consumerIDs?.contains($0.id) ?? true }
+            return ChartData.tokenBars(usage: report?.usage ?? [], agentIds: selected.map(\.id), interval: interval,
+                                       bucketSize: period.bucketSize, dimensions: .all)
+        }
+    }
+
+    /// The models the hover panel's token chart draws under a layout's `tokens`: those whose agent it names, and on an
+    /// agent's own panel only those of agents drawn with `vendor`'s mark; nil for every model where neither narrows them.
+    func panelTokenConsumers(_ filter: PanelTokenFilter, vendor: String? = nil) -> Set<String>? {
+        guard filter.narrows || vendor != nil else { return nil }
+        let mark = vendor.map(VendorMark.key)
+        return Set(consumers.filter { (mark == nil || VendorMark.key($0.vendor) == mark) && filter.keeps($0) }.map(\.id))
     }
 
     var statsActivity: ActivityGrid {
@@ -107,10 +123,12 @@ public extension UsageStore {
     /// The platform each model's calls are priced on: the one its client reaches.
     var priceRegions: PriceRegions { PriceRegions(report: report) }
 
-    /// What each agent spent in the charted range, the most tokens of the selected kinds first.
+    /// What each agent spent in the charted range, the most tokens of the selected kinds first. Its sessions are those the
+    /// Sessions page lists, whatever the range: a 30-day card picks its sessions from the last seven days, while its
+    /// tokens, price and cache rewrites come from the ledger for the whole range.
     var agentUsage: [AgentUsage] {
-        AgentUsage.build(usage: report?.usage ?? [], consumers: consumers, sessions: sessions, breakdowns: report?.sessionUsage ?? [:],
-                         vendor: { self.sessionSource($0).vendor }, interval: statsInterval, dimensions: tokenDimensions,
+        AgentUsage.build(usage: report?.usage ?? [], recached: report?.recached ?? [], consumers: consumers, sessions: statsSessions,
+                         breakdowns: report?.sessionUsage ?? [:], vendor: { self.sessionSource($0).vendor }, interval: statsInterval, dimensions: tokenDimensions,
                          region: priceRegions.region(for:))
     }
 

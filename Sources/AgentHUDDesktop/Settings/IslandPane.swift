@@ -27,6 +27,11 @@ struct IslandPane: View {
                     IslandPartSample(height: 64, enabled: settings.settings.showIslandTokens) {
                         tokenSample
                     }
+                    SettingsDivider(theme: theme)
+                    // The layout arranges what the switches above leave. A person's click here takes effect at once,
+                    // where an agent's change waits in the panel to be saved. A screen with a layout of its own says so
+                    // in its part of Screens above.
+                    SharedLayoutRow(layout: settings.panelLayout, screens: ScreensPane.attached())
                 }
             SettingsSection(title: L10n.text("Logo", "Logos"), theme: theme) {
                 SettingsToggleRow(

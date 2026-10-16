@@ -38,6 +38,25 @@ final class CodexDesktopPermissionsTests: XCTestCase, @unchecked Sendable {
             ownerClientID: "desktop-owner", now: now).first)
     }
 
+    /// A client that follows the fixture's thread, once the fixture's current state has reached it.
+    private func following(_ server: CodexDesktopTestServer) async throws -> CodexDesktopPermissions {
+        let client = CodexDesktopPermissions(dataDirectory: server.directory, timeout: 1)
+        client.stream.follow([threadID])
+        addTeardownBlock { client.stream.stop() }
+        try await arrived(server, at: client)
+        return client
+    }
+
+    /// Waits for the fixture's newest revision to be the one the client holds.
+    private func arrived(_ server: CodexDesktopTestServer, at client: CodexDesktopPermissions,
+                         file: StaticString = #filePath, line: UInt = #line) async throws {
+        for _ in 0..<1000 {
+            if client.stream.thread(threadID)?.revision == server.revision { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("the fixture's state never reached the stream", file: file, line: line)
+    }
+
     private func replacing(_ value: JSONValue, at path: [String], with replacement: JSONValue) -> JSONValue {
         guard let key = path.first, var object = value.objectValue else { return value }
         object[key] = path.count == 1 ? replacement : replacing(object[key] ?? .null, at: Array(path.dropFirst()), with: replacement)
@@ -164,11 +183,10 @@ final class CodexDesktopPermissionsTests: XCTestCase, @unchecked Sendable {
     }
 
     func testQuestionAnswerSteersOnlyTheExistingOwnerAndPreservesTheCompleteEnvelope() async throws {
-        let server = try CodexPermissionsTestServer(state: questionState([question()], canonical: true))
+        let server = try CodexDesktopTestServer(state: questionState([question()], canonical: true))
         defer { server.stop() }
-        let client = CodexDesktopPermissions(dataDirectory: server.directory, timeout: 1)
-        let snapshot = try await client.fetch(threadIDs: [threadID])
-        let item = try XCTUnwrap(snapshot.pending.first)
+        let client = try await following(server)
+        let item = try XCTUnwrap(client.snapshot().pending.first)
         let answer = PermissionDecision.answer([item.request.questions[0].answerKey: .init(custom: "ready")])
         try await client.resolve(answer, for: item)
         let sent = try XCTUnwrap(server.answers.first)
@@ -190,9 +208,9 @@ final class CodexDesktopPermissionsTests: XCTestCase, @unchecked Sendable {
 
     func testWithdrawnChangedCompletedOrReplacedTurnQuestionCannotBeAnswered() async throws {
         let original = questionState([question()])
-        let server = try CodexPermissionsTestServer(state: original)
+        let server = try CodexDesktopTestServer(state: original)
         defer { server.stop() }
-        let client = CodexDesktopPermissions(dataDirectory: server.directory, timeout: 1)
+        let client = try await following(server)
         let item = try pendingQuestion(original)
         let decision = PermissionDecision.answer([item.request.questions[0].answerKey: .init(custom: "ready")])
         let superseded = replacing(original, at: ["turns"], with: .array((original["turns"].arrayValue ?? []) + [
@@ -209,10 +227,12 @@ final class CodexDesktopPermissionsTests: XCTestCase, @unchecked Sendable {
             superseded,
         ] {
             server.state = changed
+            try await arrived(server, at: client)
             do { try await client.resolve(decision, for: item); XCTFail("Stale question cannot steer a turn") }
             catch let error as CodexDesktopPermissions.Failure { XCTAssertEqual(error, .noLongerWaiting) }
         }
         server.state = original
+        try await arrived(server, at: client)
         server.owner = "replacement-owner"
         do { try await client.resolve(decision, for: item); XCTFail("Question's original owner must still match") }
         catch let error as CodexDesktopPermissions.Failure { XCTAssertEqual(error, .noLongerWaiting) }
@@ -220,12 +240,12 @@ final class CodexDesktopPermissionsTests: XCTestCase, @unchecked Sendable {
     }
 
     func testBadQuestionTurnReceiptIsUncertainAndNeverAutomaticallyRetried() async throws {
-        let server = try CodexPermissionsTestServer(state: questionState([question()]), acknowledges: false)
+        let server = try CodexDesktopTestServer(state: questionState([question()]), acknowledges: false)
         defer { server.stop() }
         let item = try pendingQuestion()
         let answer = PermissionDecision.answer([item.request.questions[0].answerKey: .init(custom: "ready")])
         do {
-            try await CodexDesktopPermissions(dataDirectory: server.directory, timeout: 1).resolve(answer, for: item)
+            try await following(server).resolve(answer, for: item)
             XCTFail("A different acknowledged turn is not the user's question turn")
         } catch let error as CodexDesktopIPC.Failure { XCTAssertEqual(error, .acceptanceUncertain) }
         XCTAssertEqual(server.answers.count, 1)
@@ -321,14 +341,113 @@ final class CodexDesktopPermissionsTests: XCTestCase, @unchecked Sendable {
         XCTAssertThrowsError(try CodexDesktopPermissions.response(.allowAlways(.object(["persist": .string("always")])), for: item))
     }
 
-    func testFetchAndResolveUseOwnerSnapshotAndPreserveRawIntegerID() async throws {
+    /// A browser request as the bundled plugin writes one, in a turn started with the given settings.
+    private func browserState(tool: String? = "access_browser_origin", persist: JSONValue = .string("always"),
+                              message: String = "Allow ChatGPT to access https://www.reddit.com?",
+                              reviewer: String? = "user", policy: String = "on-request", sandbox: String = "workspaceWrite",
+                              extra: [String: JSONValue] = [:]) -> JSONValue {
+        var metadata: [String: JSONValue] = [
+            "codex_approval_kind": .string("mcp_tool_call"), "codex_sensitive_action": .bool(true),
+            "connector_id": .string("browser-use"), "connector_name": .string("ChatGPT"), "persist": persist,
+            "tool_title": .string("Access browser origin"), "tool_params": .object(["origin": .string("https://www.reddit.com")]),
+            "tool_params_display": .array([]), "origin": .string("https://www.reddit.com"),
+        ]
+        if let tool { metadata["tool_name"] = .string(tool) }
+        metadata.merge(extra) { _, new in new }
+        var settings: [String: JSONValue] = ["approvalPolicy": .string(policy), "sandboxPolicy": .object(["type": .string(sandbox)])]
+        if let reviewer { settings["approvalsReviewer"] = .string(reviewer) }
+        return .object([
+            "id": .string(threadID), "cwd": .string("/Users/me/project"),
+            "turns": .array([.object(["turnId": .string("native-turn"), "status": .string("inProgress"),
+                                      "params": .object(settings), "items": .array([])])]),
+            "requests": .array([.object([
+                "id": .integer(41), "method": .string("mcpServer/elicitation/request"),
+                "params": .object([
+                    "threadId": .string(threadID), "turnId": .string("native-turn"), "mode": .string("form"),
+                    "serverName": .string("cua_repl"), "message": .string(message),
+                    "requestedSchema": .object(["type": .string("object"), "properties": .object([:])]),
+                    "_meta": .object(metadata),
+                ]),
+            ])]),
+        ])
+    }
+
+    private func browser(_ state: JSONValue) throws -> CodexDesktopPermissions.Pending? {
+        try CodexDesktopPermissions.pending(state, threadID: threadID, ownerClientID: "desktop-owner", now: now).first
+    }
+
+    func testAWebsiteRequestOffersOnceAndAlwaysWithTheSiteItIsAbout() throws {
+        let item = try XCTUnwrap(browser(browserState()))
+        XCTAssertEqual(item.request.badge, "WEB")
+        XCTAssertEqual(item.request.toolName, "access_browser_origin")
+        XCTAssertTrue(item.request.summary.contains("ChatGPT") && item.request.summary.contains("https://www.reddit.com"))
+        XCTAssertEqual(item.request.detail, "https://www.reddit.com")
+        XCTAssertEqual(item.request.nativeApproval, .browserAccess(origin: "https://www.reddit.com", persist: ["always"]))
+        XCTAssertEqual(item.request.allowLabel, PermissionRequest(id: "", source: .codex, sessionID: "", toolName: nil, summary: "",
+                                                                  detail: nil, cwd: nil, at: now).allowLabel,
+                       "with no conversation scope on offer, allowing reads as it does for any one call")
+        XCTAssertEqual(item.request.alwaysAllowRule, "https://www.reddit.com", "always allowing adds the site")
+        // The answers are the ones Desktop's own card sends: accepted with nothing more, or with the site kept.
+        XCTAssertEqual(try CodexDesktopPermissions.response(.allow, for: item),
+                       .object(["action": .string("accept"), "content": .object([:]), "_meta": .null]))
+        XCTAssertEqual(try CodexDesktopPermissions.response(.allowAlways(.object(["persist": .string("always")])), for: item),
+                       .object(["action": .string("accept"), "content": .object([:]), "_meta": .object(["persist": .string("always")])]))
+        XCTAssertEqual(try CodexDesktopPermissions.response(.deny, for: item),
+                       .object(["action": .string("decline"), "content": .null, "_meta": .null]))
+        XCTAssertNil(try CodexDesktopPermissions.response(.leave, for: item))
+
+        let once = try XCTUnwrap(browser(browserState(persist: .null)))
+        XCTAssertEqual(once.request.nativeApproval, .browserAccess(origin: "https://www.reddit.com", persist: []))
+        XCTAssertNil(once.request.alwaysAllow, "a site that policy keeps from being saved offers no always")
+        XCTAssertNil(once.request.alwaysAllowRule)
+        XCTAssertThrowsError(try CodexDesktopPermissions.response(.allowAlways(.object(["persist": .string("always")])), for: once))
+    }
+
+    func testOtherBrowserRequestsReadAsDesktopWritesThemWithTheScopesTheyOffer() throws {
+        let upload = try XCTUnwrap(browser(browserState(tool: "upload_browser_files", persist: .array([.string("session"), .string("always")]),
+                                                        message: "Allow upload to reddit.com?")))
+        XCTAssertEqual(upload.request.summary, "Allow upload to reddit.com?")
+        XCTAssertEqual(try CodexDesktopPermissions.response(.allow, for: upload),
+                       .object(["action": .string("accept"), "content": .object([:]), "_meta": .object(["persist": .string("session")])]),
+                       "a request that offers the conversation is allowed for it")
+        XCTAssertNotEqual(upload.request.allowLabel, try XCTUnwrap(browser(browserState())).request.allowLabel)
+        let cdp = try XCTUnwrap(browser(browserState(tool: "access_browser_origin_with_raw_cdp",
+            message: "Allow ChatGPT to use full Chrome Developer Tools access on https://www.reddit.com",
+            extra: ["riskLevel": .string("high")])))
+        XCTAssertTrue(cdp.request.summary.contains("Developer Tools"))
+        XCTAssertEqual(cdp.request.detail?.components(separatedBy: "\n\n").count, 2, "the warning Desktop gives stands above the site")
+        let history = try XCTUnwrap(browser(browserState(tool: nil, message: "Allow ChatGPT to use your browsing history for this task?",
+            extra: ["subtitle": .string("ChatGPT can use records of pages visited."), "origin": .null, "tool_params": .object([:])])))
+        XCTAssertEqual(history.request.toolName, "browser")
+        XCTAssertEqual(history.request.detail, "ChatGPT can use records of pages visited.")
+        XCTAssertNil(try browser(browserState(tool: "download_browser_files", message: " ")), "nothing to read is nothing to ask")
+        XCTAssertNil(try browser(browserState(persist: .string("forever"))), "a scope this reader does not know stays with Desktop")
+        XCTAssertNil(try browser(browserState(persist: .integer(1))))
+    }
+
+    func testABrowserRequestIsShownOnlyInATurnTheUserReviews() throws {
+        XCTAssertNil(try browser(browserState(reviewer: "auto_review")), "automatic review answers it without the user")
+        XCTAssertNil(try browser(browserState(reviewer: nil)), "an unknown reviewer leaves the request with Desktop")
+        XCTAssertNil(try browser(browserState(policy: "never", sandbox: "dangerFullAccess")),
+                     "Desktop itself answers a site's pages in a turn that never asks and has full access")
+        XCTAssertNotNil(try browser(browserState(tool: "upload_browser_files", persist: .string("session"), message: "Allow upload to reddit.com?",
+                                                 policy: "never", sandbox: "dangerFullAccess")), "moving files is still asked there")
+        XCTAssertNotNil(try browser(browserState(policy: "never")))
+        // A request for a turn the state no longer holds is judged by the thread's current settings.
+        var orphan = try XCTUnwrap(browserState().objectValue)
+        orphan["turns"] = .array([])
+        XCTAssertNil(try browser(.object(orphan)))
+        orphan["currentPermissions"] = .object(["approvalsReviewer": .string("user"), "approvalPolicy": .string("on-request")])
+        XCTAssertNotNil(try browser(.object(orphan)))
+    }
+
+    func testAnAnswerUsesTheStateTheStreamHoldsAndPreservesARawIntegerID() async throws {
         let raw = wire(id: .integer(Int64.max))
-        let server = try CodexPermissionsTestServer(state: state([raw]))
+        let server = try CodexDesktopTestServer(state: state([raw]))
         defer { server.stop() }
-        let client = CodexDesktopPermissions(dataDirectory: server.directory, timeout: 1)
-        let snapshot = try await client.fetch(threadIDs: [threadID])
+        let client = try await following(server)
+        let snapshot = client.snapshot()
         XCTAssertEqual(snapshot.observedThreadIDs, [threadID])
-        XCTAssertEqual(Array(snapshot.readSeconds.keys), [threadID])
         let item = try XCTUnwrap(snapshot.pending.first)
         try await client.resolve(.allow, for: item)
         let answer = try XCTUnwrap(server.answers.first)
@@ -336,34 +455,43 @@ final class CodexDesktopPermissionsTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(answer["version"], .integer(1))
         XCTAssertEqual(answer["params"]["requestId"], .integer(Int64.max))
         XCTAssertEqual(answer["params"]["response"]["_meta"]["persist"].stringValue, "session")
-        XCTAssertEqual(server.methods.filter { $0 == "thread-owner-discovery" }.count, 2)
-        XCTAssertEqual(server.methods.filter { $0 == "thread-stream-following-changed" }.count, 4)
+        XCTAssertEqual(server.methods.filter { $0 == "thread-owner-discovery" }.count, 2, "the stream's, and the answer's own")
+        XCTAssertEqual(server.methods.filter { $0 == "thread-stream-following-changed" }.count, 1,
+                       "the answer is checked against the state the stream already holds: the thread is not asked for again")
     }
 
-    func testLongThreadSnapshotIsReadWithItsRequest() async throws {
-        // Desktop sends a thread's whole history with its requests: 33 MB for one thread measured on 2026-10-12.
+    func testLongThreadStateIsReadWithItsRequestAndWithoutItsLongStrings() async throws {
+        // Desktop sends a thread's whole history with its requests: 108 MB for one thread measured on 2026-10-14, of
+        // which 102 MB were its tool results' screenshots and page dumps. This one is past the 64 MiB a reading stopped at.
         var long = try XCTUnwrap(state([wire()]).objectValue)
         long["turns"] = .array([.object(["turnId": .string("earlier-turn"), "status": .string("completed"), "items": .array([
-            .object(["id": .string("output"), "type": .string("commandExecution"),
-                     "aggregatedOutput": .string(String(repeating: "x", count: 9 * 1024 * 1024))]),
+            .object(["id": .string("output"), "type": .string("mcpToolCall"), "result": .object(["content": .array([
+                .object(["type": .string("image"), "data": .string(String(repeating: "x", count: 70 * 1024 * 1024))]),
+            ])])]),
         ])])])
-        let server = try CodexPermissionsTestServer(state: .object(long))
+        let server = try CodexDesktopTestServer(state: .object(long))
         defer { server.stop() }
-        let snapshot = try await CodexDesktopPermissions(dataDirectory: server.directory, timeout: 10).fetch(threadIDs: [threadID])
+        let client = try await following(server)
+        let snapshot = client.snapshot()
         XCTAssertEqual(snapshot.observedThreadIDs, [threadID])
         XCTAssertEqual(snapshot.pending.map(\.request.toolName), ["computer_use_app"])
+        let item = try XCTUnwrap(client.stream.thread(threadID)?.state["turns"].arrayValue?.first?["items"].arrayValue?.first)
+        XCTAssertEqual(item["type"].stringValue, "mcpToolCall")
+        XCTAssertEqual(item["result"]["content"].arrayValue?.first, .object(["type": .string("image"), "data": .null]),
+                       "the picture is passed over as it is read; what surrounds it is kept")
     }
 
     func testChangedRequestOrOwnerNeverReceivesAnAnswer() async throws {
-        let server = try CodexPermissionsTestServer(state: state([wire()]))
+        let server = try CodexDesktopTestServer(state: state([wire()]))
         defer { server.stop() }
-        let client = CodexDesktopPermissions(dataDirectory: server.directory, timeout: 1)
-        let snapshot = try await client.fetch(threadIDs: [threadID])
-        let item = try XCTUnwrap(snapshot.pending.first)
+        let client = try await following(server)
+        let item = try XCTUnwrap(client.snapshot().pending.first)
         server.state = state([replacing(wire(), at: ["params", "_meta", "tool_params", "app"], with: .string("other.app"))])
+        try await arrived(server, at: client)
         do { try await client.resolve(.allow, for: item); XCTFail("Changed permission cannot be approved") }
         catch let error as CodexDesktopPermissions.Failure { XCTAssertEqual(error, .noLongerWaiting) }
         server.state = state([wire()])
+        try await arrived(server, at: client)
         server.owner = "new-owner"
         do { try await client.resolve(.deny, for: item); XCTFail("A new owner cannot answer the original permission") }
         catch let error as CodexDesktopPermissions.Failure { XCTAssertEqual(error, .noLongerWaiting) }
@@ -372,48 +500,57 @@ final class CodexDesktopPermissionsTests: XCTestCase, @unchecked Sendable {
 
     func testAlwaysAndDenyDeliverTheNativeResponsesAndRequireOwnerAcknowledgement() async throws {
         for decision in [PermissionDecision.allowAlways(.object(["persist": .string("always")])), .deny] {
-            let server = try CodexPermissionsTestServer(state: state([wire()]))
+            let server = try CodexDesktopTestServer(state: state([wire()]))
             defer { server.stop() }
-            let client = CodexDesktopPermissions(dataDirectory: server.directory, timeout: 1)
+            let client = try await following(server)
             let item = try pending()
             try await client.resolve(decision, for: item)
             let answer = try XCTUnwrap(server.answers.first)
             XCTAssertEqual(answer["params"]["response"], try CodexDesktopPermissions.response(decision, for: item))
         }
-        let server = try CodexPermissionsTestServer(state: state([wire()]), acknowledges: false)
+        let server = try CodexDesktopTestServer(state: state([wire()]), acknowledges: false)
         defer { server.stop() }
         do {
-            try await CodexDesktopPermissions(dataDirectory: server.directory, timeout: 1).resolve(.allow, for: pending())
+            try await following(server).resolve(.allow, for: pending())
             XCTFail("A false owner receipt does not establish acceptance")
         } catch let error as CodexDesktopIPC.Failure { XCTAssertEqual(error, .acceptanceUncertain) }
         XCTAssertEqual(server.answers.count, 1, "An uncertain answer must never be automatically retried")
     }
 
-    func testNoOwnerOrMalformedSnapshotIsUnknownAndLeaveDoesNotConnect() async throws {
-        let server = try CodexPermissionsTestServer(state: .object([:]))
+    func testNoOwnerOrMalformedStateIsUnknownAndLeaveDoesNotConnect() async throws {
+        let server = try CodexDesktopTestServer(state: .object([:]))
         defer { server.stop() }
-        let client = CodexDesktopPermissions(dataDirectory: server.directory, timeout: 1)
-        let malformed = try await client.fetch(threadIDs: [threadID])
+        let client = try await following(server)
+        let malformed = client.snapshot()
         XCTAssertTrue(malformed.pending.isEmpty)
-        XCTAssertTrue(malformed.observedThreadIDs.isEmpty)
-        XCTAssertEqual(Array(malformed.readSeconds.keys), [threadID], "a reading that failed still took its time")
-        server.owner = nil
-        let absent = try await client.fetch(threadIDs: [threadID])
-        XCTAssertTrue(absent.observedThreadIDs.isEmpty)
+        XCTAssertTrue(malformed.observedThreadIDs.isEmpty, "a state that does not read as expected says nothing about what waits")
         let before = server.methods
         try await client.resolve(.leave, for: pending())
         XCTAssertEqual(server.methods, before)
+
+        let ownerless = try CodexDesktopTestServer(state: state([wire()]))
+        defer { ownerless.stop() }
+        ownerless.owner = nil
+        let absent = CodexDesktopPermissions(dataDirectory: ownerless.directory, timeout: 1)
+        absent.stream.follow([threadID])
+        addTeardownBlock { absent.stream.stop() }
+        for _ in 0..<200 where !ownerless.methods.contains("thread-owner-discovery") { try await Task.sleep(for: .milliseconds(10)) }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(absent.snapshot().observedThreadIDs.isEmpty)
+        XCTAssertFalse(ownerless.methods.contains("thread-stream-following-changed"), "a thread nobody owns is not followed")
+        do { try await absent.resolve(.allow, for: pending()); XCTFail("An unknown thread cannot be answered") }
+        catch let error as CodexDesktopPermissions.Failure { XCTAssertEqual(error, .noLongerWaiting) }
     }
 
-    func testUnavailableSocketThrowsAndCancelledPreflightNeverAnswers() async throws {
-        let missing = URL(fileURLWithPath: "/private/tmp/agenthud-missing-\(UUID().uuidString)")
-        do {
-            _ = try await CodexDesktopPermissions(dataDirectory: missing).fetch(threadIDs: [threadID])
-            XCTFail("A missing native service is not an empty snapshot")
-        } catch let error as CodexDesktopIPC.Failure { XCTAssertEqual(error, .unavailable) }
-        let server = try CodexPermissionsTestServer(state: state([wire()]))
+    func testUnavailableSocketIsUnknownAndCancelledPreflightNeverAnswers() async throws {
+        let missing = CodexDesktopPermissions(dataDirectory: URL(fileURLWithPath: "/private/tmp/agenthud-missing-\(UUID().uuidString)"))
+        missing.stream.follow([threadID])
+        addTeardownBlock { missing.stream.stop() }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(missing.snapshot().observedThreadIDs.isEmpty, "A missing native service is not an empty thread")
+        let server = try CodexDesktopTestServer(state: state([wire()]))
         defer { server.stop() }
-        let client = CodexDesktopPermissions(dataDirectory: server.directory, timeout: 1)
+        let client = try await following(server)
         let item = try pending()
         let task = Task {
             withUnsafeCurrentTask { $0?.cancel() }
@@ -423,150 +560,4 @@ final class CodexDesktopPermissionsTests: XCTestCase, @unchecked Sendable {
         catch is CancellationError { }
         XCTAssertTrue(server.answers.isEmpty)
     }
-}
-
-/// A private fixture hub. It answers only fixture-owned requests and never connects to Desktop's live socket.
-private final class CodexPermissionsTestServer: @unchecked Sendable {
-    let directory = URL(fileURLWithPath: "/private/tmp/agenthud-permission-\(UUID().uuidString.prefix(8))")
-    private let listener: Int32
-    private let lock = NSLock()
-    private let finished = DispatchSemaphore(value: 0)
-    private var stopped = false
-    private var peer: Int32?
-    private var fixtureState: JSONValue
-    private var fixtureOwner: String? = "desktop-owner"
-    private let acknowledges: Bool
-    private var received: [JSONValue] = []
-    var state: JSONValue {
-        get { lock.withLock { fixtureState } }
-        set { lock.withLock { fixtureState = newValue } }
-    }
-    var owner: String? {
-        get { lock.withLock { fixtureOwner } }
-        set { lock.withLock { fixtureOwner = newValue } }
-    }
-    var methods: [String] { lock.withLock { received.compactMap { $0["method"].stringValue } } }
-    var answers: [JSONValue] {
-        lock.withLock { received.filter {
-            ["thread-follower-submit-mcp-server-elicitation-response", "thread-follower-steer-turn"].contains($0["method"].stringValue ?? "")
-        } }
-    }
-
-    init(state: JSONValue, acknowledges: Bool = true) throws {
-        fixtureState = state
-        self.acknowledges = acknowledges
-        let folder = directory.appendingPathComponent("ipc")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let path = folder.appendingPathComponent("ipc.sock").path
-        listener = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-        guard listener >= 0, UnixSocket.fits(path) else { throw FixtureFailure.socket }
-        var address = sockaddr_un()
-        address.sun_family = sa_family_t(AF_UNIX)
-        _ = withUnsafeMutablePointer(to: &address.sun_path) { field in
-            field.withMemoryRebound(to: CChar.self, capacity: 104) { strlcpy($0, path, 104) }
-        }
-        let bound = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-        guard bound == 0, Darwin.listen(listener, 8) == 0 else {
-            Darwin.close(listener)
-            try? FileManager.default.removeItem(at: directory)
-            throw FixtureFailure.socket
-        }
-        DispatchQueue.global().async { self.serve(); self.finished.signal() }
-    }
-
-    func stop() {
-        let active = lock.withLock { () -> Int32? in stopped = true; return peer }
-        if let active { Darwin.shutdown(active, SHUT_RDWR) }
-        Darwin.close(listener)
-        _ = finished.wait(timeout: .now() + 2)
-        try? FileManager.default.removeItem(at: directory)
-    }
-
-    private func serve() {
-        while !lock.withLock({ stopped }) {
-            var entry = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
-            guard poll(&entry, 1, 100) > 0, entry.revents & Int16(POLLIN) != 0 else { continue }
-            let connection = Darwin.accept(listener, nil, nil)
-            guard connection >= 0 else { return }
-            lock.withLock { peer = connection }
-            var receiveTimeout = timeval(tv_sec: 1, tv_usec: 0), on: Int32 = 1
-            setsockopt(connection, SOL_SOCKET, SO_RCVTIMEO, &receiveTimeout, socklen_t(MemoryLayout<timeval>.size))
-            setsockopt(connection, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
-            do { while true { try handle(receive(connection), peer: connection) } } catch { }
-            Darwin.close(connection)
-            lock.withLock { peer = nil }
-        }
-    }
-
-    private func handle(_ message: JSONValue, peer: Int32) throws {
-        lock.withLock { received.append(message) }
-        let method = message["method"].stringValue ?? ""
-        if method == "thread-stream-following-changed" {
-            if message["params"]["following"].boolValue == true, let owner {
-                try send(peer, .object([
-                    "type": .string("broadcast"), "method": .string("thread-stream-state-changed"), "version": .integer(11),
-                    "sourceClientId": .string(owner), "params": .object([
-                        "hostId": .string("local"), "conversationId": message["params"]["conversationId"],
-                        "change": .object(["type": .string("snapshot"), "revision": .integer(1), "conversationState": state]),
-                    ]),
-                ]))
-            }
-            return
-        }
-        var reply: [String: JSONValue] = ["type": .string("response"), "requestId": message["requestId"], "resultType": .string("success")]
-        switch method {
-        case "initialize": reply["result"] = .object(["clientId": .string("fixture-client")])
-        case "thread-owner-discovery":
-            if let owner {
-                reply["handledByClientId"] = .string(owner)
-                reply["result"] = .object([:])
-            } else {
-                reply["resultType"] = .string("error")
-                reply["error"] = .string("no-client-found")
-            }
-        case "thread-follower-submit-mcp-server-elicitation-response":
-            reply["handledByClientId"] = owner.map(JSONValue.string) ?? .null
-            reply["result"] = .object(["method": .string(method), "result": .object(["ok": .bool(acknowledges)])])
-        case "thread-follower-steer-turn":
-            reply["handledByClientId"] = owner.map(JSONValue.string) ?? .null
-            reply["result"] = .object(["method": .string(method), "result": .object([
-                "result": .object(["turnId": .string(acknowledges ? "native-turn" : "different-turn")]),
-            ])])
-        default: throw FixtureFailure.protocolError
-        }
-        try send(peer, .object(reply))
-    }
-
-    private func send(_ peer: Int32, _ message: JSONValue) throws {
-        let payload = try RecordCoding.encoder().encode(message)
-        var length = UInt32(payload.count).littleEndian
-        var frame = withUnsafeBytes(of: &length) { Data($0) }
-        frame.append(payload)
-        guard UnixSocket.send(peer, frame) else { throw FixtureFailure.socket }
-    }
-
-    private func receive(_ peer: Int32) throws -> JSONValue {
-        let header = try read(peer, count: 4)
-        let length = header.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self)) }
-        guard length > 0, length <= 1024 * 1024 else { throw FixtureFailure.protocolError }
-        return try JSONValue.parse(read(peer, count: Int(length)))
-    }
-
-    private func read(_ peer: Int32, count: Int) throws -> Data {
-        var result = Data()
-        while result.count < count {
-            var bytes = [UInt8](repeating: 0, count: min(count - result.count, 4096))
-            let size = Darwin.recv(peer, &bytes, bytes.count, 0)
-            if size < 0, errno == EINTR { continue }
-            guard size > 0 else { throw FixtureFailure.socket }
-            result.append(contentsOf: bytes.prefix(size))
-        }
-        return result
-    }
-
-    private enum FixtureFailure: Error { case socket, protocolError }
 }

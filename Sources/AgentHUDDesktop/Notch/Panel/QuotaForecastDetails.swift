@@ -11,7 +11,6 @@ struct QuotaForecastDetails: View {
             .font(.ui(12, .medium))
             .monospacedDigit()
             .foregroundStyle(theme.text)
-            .lineLimit(1)
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .background(RoundedRectangle(cornerRadius: 8).fill(theme.windowBackground))

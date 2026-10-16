@@ -76,8 +76,10 @@ public enum CodexSessionOrigins {
         let installer = HookInstaller(configuration: configuration, arguments: arguments)
         try installer.configure(enabled: enabled, executable: executable) { configuration, command in
             try events.reduce(configuration) { current, event in
+                // Where a session runs is a report: the client goes on without waiting for it.
                 try ClaudeStyleHooks.updating(current, event: event, owns: installer.owns, command: command,
-                                               group: ClaudeStyleHooks.group(timeout: 5))
+                                               fixed: ClaudeStyleHooks.reporting,
+                                               group: ClaudeStyleHooks.group(timeout: 5, fixed: ClaudeStyleHooks.reporting))
             }
         }
         if enabled { try prepare(directory: directory) }

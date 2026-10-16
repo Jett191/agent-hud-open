@@ -24,6 +24,8 @@ public enum FastTranscriptParser {
     private static let metaMarker = Array("\"isMeta\":true".utf8)
     private static let summaryMarker = Array("\"isCompactSummary\":true".utf8)
     private static let compactionMarker = Array("\"subtype\":\"compact_boundary\"".utf8)
+    /// What Claude Code writes once the agent stopped: its Stop hooks' summary, or in some builds the turn's duration.
+    private static let stopMarkers = [Array("\"subtype\":\"stop_hook_summary\"".utf8), Array("\"subtype\":\"turn_duration\"".utf8)]
     private static let stopReasonKey = Array("\"stop_reason\":".utf8)
     private static let usageKey = Array("\"usage\":{".utf8)
     private static let modelKey = Array("\"model\":\"".utf8)
@@ -74,7 +76,8 @@ public enum FastTranscriptParser {
     }
 
     /// Parses complete lines in `data` (a trailing partial line is ignored by the caller).
-    public static func parse(_ data: Data) -> [TranscriptEvent] {
+    /// - offset: where `data` begins in its log, which each event then carries as its own.
+    public static func parse(_ data: Data, at offset: Int? = nil) -> [TranscriptEvent] {
         var events: [TranscriptEvent] = []
         data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
             guard let base = buffer.baseAddress else { return }
@@ -89,7 +92,8 @@ public enum FastTranscriptParser {
                 } else {
                     end = count
                 }
-                if end > start, let event = parseLine(UnsafeRawBufferPointer(start: rest, count: end - start)) {
+                if end > start, var event = parseLine(UnsafeRawBufferPointer(start: rest, count: end - start)) {
+                    event.offset = offset.map { $0 + start }
                     events.append(event)
                 }
                 start = end + 1
@@ -175,6 +179,7 @@ public enum FastTranscriptParser {
             isSidechain: find(sidechainMarker, in: head) != nil,
             isPrompt: isPrompt,
             isCompaction: role == .other && find(compactionMarker, in: head) != nil,
+            isStop: role == .other && stopMarkers.contains { find($0, in: head) != nil },
             entrypoint: field(entrypointKey),
             returnsStructuredOutput: role == .assistant && find(structuredOutputMarker, in: head) != nil
         )

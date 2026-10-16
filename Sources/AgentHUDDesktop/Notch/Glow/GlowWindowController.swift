@@ -30,7 +30,15 @@ final class GlowWindowController {
     private lazy var animator = GlowAnimator(host: host, layer: glowLayer)
     var isAnimating: Bool { animator.isRunning }
 
-    static let panelWidth: CGFloat = 1000
+    /// The window's width beside the notch, where the glow rims the open panel too: the widest panel a layout sets
+    /// (`PanelStyle.widthRange`) with the farthest field any setting draws on both sides of it, a grid's deepest or the
+    /// soft glow's widest range and feather, and never less than the 1000 points it had. The host clips to it.
+    static let panelWidth: CGFloat = {
+        let grid = GlowMatrix.reach(pitch: GlowSettings.gridPitchRange.upperBound, core: GlowSettings.gridCoreRange.upperBound,
+                                    fade: GlowSettings.gridFadeRange.upperBound)
+        let soft = GlowSettings.sizeRange.upperBound + GlowSettings.sizeRange.upperBound * 3
+        return max(1000, CGFloat(PanelStyle.widthRange.upperBound) + 2 * CGFloat(max(grid, soft)))
+    }()
 
     /// Inputs of the soft glow bitmap.
     fileprivate struct SoftKey: Hashable, Sendable {

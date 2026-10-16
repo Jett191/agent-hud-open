@@ -29,7 +29,10 @@ enum GrokBotUsage {
 
     /// - routineRuns: the bot each routine run belongs to, by run id, as the Bot service's routine records say. A billed
     ///   run they name becomes a sub-agent of that bot's session; any other billed sub-agent stays a session of its own.
-    static func merge(_ sessions: [LiveSession], routineRuns: [String: GrokBotRoutineRuns.Run] = [:]) -> [LiveSession] {
+    /// - listedSince: billed sub-agents come whatever their age, so a listed bot keeps all its runs; one that joins no bot
+    ///   stays only when it was active at or after this time (`SessionWindow`).
+    static func merge(_ sessions: [LiveSession], routineRuns: [String: GrokBotRoutineRuns.Run] = [:],
+                      listedSince: Date = .distantPast) -> [LiveSession] {
         let billed = Dictionary(grouping: sessions.filter {
             conversationID($0.id) != nil
         }, by: { conversationID($0.id)! })
@@ -73,7 +76,11 @@ enum GrokBotUsage {
                 agentName: bot.agentName, subagentSessions: (bot.subagentSessions ?? []) + added,
                 lastActivityAt: bot.lastActivityAt, navigationTarget: bot.navigationTarget, usageKey: bot.usageKey)
         }
-        return sessions.compactMap { consumed.contains($0.id) ? nil : joined[$0.id] ?? $0 }
+        return sessions.compactMap { session in
+            if consumed.contains(session.id) { return nil }
+            if billedSubagentID(session.id) != nil, (session.lastActivityAt ?? session.endedAt ?? session.startedAt) < listedSince { return nil }
+            return joined[session.id] ?? session
+        }
     }
 
     private static func conversationID(_ id: String) -> String? {

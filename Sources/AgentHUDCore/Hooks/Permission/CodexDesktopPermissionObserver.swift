@@ -1,24 +1,28 @@
 import Foundation
 
-/// Reads Desktop's app approvals and unanswered mid-turn questions. Engine approvals continue through their hook.
+/// Shows Desktop's app and browser approvals and unanswered mid-turn questions. Engine approvals continue through their hook.
+///
+/// The threads with a session in flight are followed; their owners say what changes, and nothing is asked again.
 @MainActor
 public final class CodexDesktopPermissionObserver {
     private let requests: PermissionRequests
     private let client: CodexDesktopPermissions
     private var task: Task<Void, Never>?
     private var sessionIDs: Set<String> = []
-    /// Retained across failed readings, so a disconnect does not settle a dismissed native prompt.
+    /// When each thread's session was last reported in flight, on the system's uptime. A thread stays followed for a
+    /// while after: following it again would have its owner send the whole state again, and a conversation is a turn
+    /// after a turn.
+    private var reported: [String: TimeInterval] = [:]
+    static let linger: TimeInterval = 600
+    /// Retained while a thread's state is unknown, so a disconnect does not settle a dismissed native prompt.
     private var pending: [String: CodexDesktopPermissions.Pending] = [:]
-    /// Desktop builds a thread's whole history for every read: a third of a second of its CPU for a 33 MB thread.
-    /// A thread therefore rests for this many times as long as its last read took, on the system's uptime.
-    static let restFactor: TimeInterval = 10
-    private var restsUntil: [String: TimeInterval] = [:]
-    /// What the last pass showed. A resting thread is not asked, so its cards stand as they were.
-    private var shown: [CodexDesktopPermissions.Pending] = []
+
+    /// The observer's own name among the users of the stream.
+    private static let interest = "approvals"
 
     public init() {
         requests = .shared
-        client = CodexDesktopPermissions()
+        client = CodexDesktopPermissions(stream: .shared)
     }
 
     init(requests: PermissionRequests, client: CodexDesktopPermissions) {
@@ -26,8 +30,13 @@ public final class CodexDesktopPermissionObserver {
         self.client = client
     }
 
-    public func updateSessions(_ sessions: [LiveSession]) {
-        sessionIDs = Self.threadIDs(in: sessions)
+    public func updateSessions(_ sessions: [LiveSession]) { updateSessions(sessions, at: ProcessInfo.processInfo.systemUptime) }
+
+    func updateSessions(_ sessions: [LiveSession], at uptime: TimeInterval) {
+        for id in Self.threadIDs(in: sessions) { reported[id] = uptime }
+        reported = reported.filter { uptime - $0.value < Self.linger }
+        sessionIDs = Set(reported.keys)
+        follow()
     }
 
     static func threadIDs(in sessions: [LiveSession]) -> Set<String> {
@@ -40,53 +49,45 @@ public final class CodexDesktopPermissionObserver {
     public func setEnabled(_ enabled: Bool) {
         guard enabled else { return stop() }
         guard task == nil else { return }
+        let client = client
         task = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                let ids = sessionIDs.union(pending.values.map(\.threadID))
-                let due = due(ids, at: ProcessInfo.processInfo.systemUptime)
-                do {
-                    let snapshot = try await client.fetch(threadIDs: due)
-                    try Task.checkCancellation()
-                    reconcile(snapshot, resting: ids.subtracting(due))
-                } catch {
-                    if Task.isCancelled { return }
-                    shown.removeAll()
-                    requests.removeNativeRequests(source: .codex)
-                }
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            for await _ in client.stream.changes {
+                // Reading a thread for its requests is kept off the main actor.
+                let snapshot = await Task.detached(priority: .utility) { client.snapshot() }.value
+                guard !Task.isCancelled, let self else { return }
+                reconcile(snapshot)
             }
         }
+        follow()
     }
 
-    /// The threads a pass asks: those whose rest is over.
-    func due(_ ids: Set<String>, at uptime: TimeInterval) -> Set<String> {
-        restsUntil = restsUntil.filter { ids.contains($0.key) }
-        return ids.filter { (restsUntil[$0] ?? 0) <= uptime }
+    /// A thread is followed while its session is in flight and for a while after, and while a card of its is waiting to be settled.
+    private func follow() {
+        client.stream.follow(task == nil ? [] : sessionIDs.union(pending.values.map(\.threadID)), for: Self.interest)
     }
 
-    func reconcile(_ snapshot: CodexDesktopPermissions.Snapshot, resting: Set<String> = [],
-                   at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
-        for (threadID, seconds) in snapshot.readSeconds { restsUntil[threadID] = uptime + seconds * Self.restFactor }
-        shown = (snapshot.pending + shown.filter { resting.contains($0.threadID) }).sorted { $0.id < $1.id }
-        let current = Dictionary(shown.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    func reconcile(_ snapshot: CodexDesktopPermissions.Snapshot) {
+        requests.updateWaitingSessions(snapshot.waitingThreadIDs, source: .codex)
+        let current = Dictionary(snapshot.pending.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for item in pending.values where snapshot.observedThreadIDs.contains(item.threadID) && current[item.id] == nil {
             requests.settleNativeRequest(item.id, source: .codex)
             pending.removeValue(forKey: item.id)
         }
         for item in snapshot.pending { pending[item.id] = item }
-        requests.updateNativeRequests(shown.map(\.request), source: .codex, preservesDismissals: true) { [client] request, decision in
+        requests.updateNativeRequests(snapshot.pending.map(\.request), source: .codex, preservesDismissals: true) { [client] request, decision in
             guard let item = current[request.id] else { return }
             try await client.resolve(decision, for: item)
         }
+        follow()
     }
 
     public func stop() {
         task?.cancel()
         task = nil
         pending.removeAll()
-        shown.removeAll()
-        restsUntil.removeAll()
+        reported.removeAll()
+        sessionIDs.removeAll()
+        follow()
         requests.stopNativeRequests(source: .codex)
     }
 }

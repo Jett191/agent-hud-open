@@ -113,9 +113,13 @@ final class CodexSessionOriginsTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(start[0]["unknown"].stringValue, "kept")
         XCTAssertEqual(start[0]["hooks"].arrayValue?.last?["timeout"].countValue, 23)
         for event in CodexSessionOrigins.events {
-            let commands = (updated["hooks"][event].arrayValue ?? []).flatMap { $0["hooks"].arrayValue ?? [] }.compactMap { $0["command"].stringValue }
+            let handlers = (updated["hooks"][event].arrayValue ?? []).flatMap { $0["hooks"].arrayValue ?? [] }
+            let commands = handlers.compactMap { $0["command"].stringValue }
             XCTAssertEqual(commands.filter { $0.hasSuffix(" --session-origin-hook codex") }, ["'\(executable.path)' --session-origin-hook codex"])
             XCTAssertTrue(commands.contains("~/bin/session-log"))
+            XCTAssertEqual(handlers.filter { $0["command"].stringValue?.hasSuffix(" --session-origin-hook codex") == true }.map { $0["async"] },
+                           [.bool(true)], "where a session runs is a report: Codex goes on without waiting for it, an older handler included")
+            XCTAssertTrue(handlers.filter { $0["command"].stringValue == "~/bin/session-log" }.allSatisfy { $0["async"] == .null })
         }
         let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
         try FileManager.default.setAttributes([.modificationDate: timestamp], ofItemAtPath: settings.path)

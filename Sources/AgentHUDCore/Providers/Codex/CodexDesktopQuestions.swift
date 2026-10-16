@@ -58,6 +58,11 @@ enum CodexDesktopQuestions {
         })?["turnId"].stringValue
     }
 
+    /// The turn of that id as the state holds it, for what it was started with.
+    static func turn(_ id: String, in state: JSONValue) throws -> JSONValue? {
+        try turns(state).last { $0["turnId"].stringValue == id }
+    }
+
     private static func turns(_ state: JSONValue, includeOverlay: Bool = true) throws -> [JSONValue] {
         guard let fields = state.objectValue else { throw CodexDesktopIPC.Failure.protocolError }
         let overlay: [JSONValue]

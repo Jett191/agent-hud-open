@@ -16,6 +16,8 @@ public final class UnixSocketListener {
     /// The lock that makes this process the one serving the path, and the socket file it made, by device and inode.
     private var lock: Int32 = -1
     private var socket: [Int]?
+    /// This listener's hold on the file mode mask, from its start until its socket is made or will not be.
+    private var mask: SocketMask?
 
     /// - category: names the socket in the application's log.
     public init(path: String, requestLimit: Int, category: String, onRequest: @escaping @MainActor (Data, NWConnection) -> Void) {
@@ -49,27 +51,28 @@ public final class UnixSocketListener {
         }
         unlink(path)
         // The socket must never be readable by anyone else, not even for the moment between bind and chmod.
-        let previous = umask(0o077)
+        let mask = SocketMask()
         let parameters = NWParameters()
         parameters.defaultProtocolStack.transportProtocol = NWProtocolTCP.Options()
         parameters.requiredLocalEndpoint = .unix(path: path)
         guard let listener = try? NWListener(using: parameters) else {
-            umask(previous)
+            mask.release()
             close(lock)
             log.error("Could not listen on \(path, privacy: .public)")
             return false
         }
         self.lock = lock
         self.listener = listener
+        self.mask = mask
         listener.stateUpdateHandler = { [weak self] state in
             MainActor.assumeIsolated {
                 switch state {
                 case .ready:
-                    umask(previous)
+                    mask.release()
                     chmod(path, 0o700)
                     self?.socket = Self.identity(path)
-                case .failed:
-                    umask(previous)
+                case .failed, .cancelled:
+                    mask.release()
                 default:
                     break
                 }
@@ -89,6 +92,8 @@ public final class UnixSocketListener {
     public func stop() {
         listener?.cancel()
         listener = nil
+        mask?.release()
+        mask = nil
         if let socket, Self.identity(path) == socket { unlink(path) }
         socket = nil
         if lock >= 0 { close(lock) }
@@ -114,5 +119,29 @@ public final class UnixSocketListener {
                 }
             }
         }
+    }
+}
+
+/// One listener's hold on the process's file mode mask, kept tight while its socket is made. A process has one mask,
+/// so the listeners that are coming up share it: the first tightens it, and it returns to what that one found when
+/// the last of them lets go. Each putting back what it found itself would leave the mask tight for good once two
+/// start in the same turn, and with it every file the application and its child processes write afterwards.
+@MainActor
+private final class SocketMask {
+    private static var holds = 0
+    private static var found: mode_t = 0
+    private var held = true
+
+    init() {
+        if Self.holds == 0 { Self.found = umask(0o077) }
+        Self.holds += 1
+    }
+
+    /// Lets go of the mask; letting go twice is letting go once.
+    func release() {
+        guard held else { return }
+        held = false
+        Self.holds -= 1
+        if Self.holds == 0 { umask(Self.found) }
     }
 }

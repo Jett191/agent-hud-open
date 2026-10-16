@@ -2,15 +2,24 @@ import Foundation
 
 public struct DeepSeekBalanceClient: Sendable {
     public let directory: URL
-    public init(directory: URL) { self.directory = directory }
+    /// Harness's credentials package and the runtime that loads it, looked up for each reading.
+    private let harness: @Sendable () -> DeepSeekCredentialLocator.Harness
+
+    public init(directory: URL) { self.init(directory: directory) { DeepSeekCredentialLocator.locate() } }
+
+    init(directory: URL, harness: @escaping @Sendable () -> DeepSeekCredentialLocator.Harness) {
+        self.directory = directory
+        self.harness = harness
+    }
 
     public func fetch() async throws -> DeepSeekBalance {
-        let directory = directory
+        let directory = directory, harness = harness
         return try await Task.detached(priority: .utility) {
             // Reuse Harness's actual YAML parser. Secrets stay inside the short-lived helper process.
-            let data = try await DeepSeekNode.run(script: Self.script,
-                                                 arguments: [directory.path, DeepSeekCredentialLocator.module()?.path ?? ""],
-                                                 environment: ProcessInfo.processInfo.environment.filter { !["NODE_OPTIONS", "NODE_PATH"].contains($0.key) })
+            let located = harness()
+            let data = try await DeepSeekNode.run(script: Self.script, arguments: [directory.path, located.module?.path ?? ""],
+                                                 environment: ProcessInfo.processInfo.environment.filter { !["NODE_OPTIONS", "NODE_PATH"].contains($0.key) },
+                                                 runtime: located.runtime)
             if let reply = try JSONSerialization.jsonObject(with: data) as? [String: Any], let error = reply["error"] as? String {
                 let message: String
                 switch error {

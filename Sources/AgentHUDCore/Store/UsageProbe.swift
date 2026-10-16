@@ -16,7 +16,7 @@ public enum UsageProbe {
         print("Codex engine: \(CodexLocator.find()?.path ?? "not found")")
         print("Codex data: \(CodexLocator.dataDirectory.path)")
         print("DeepSeek data: \(DeepSeekLocator.dataDirectory.path) (\(DeepSeekLocator.isInstalled() ? "installed" : "not detected"))")
-        print("DeepSeek decoder: \(DeepSeekLocator.nodeExecutable()?.path ?? "Node.js not found")")
+        print("DeepSeek decoder: \(DeepSeekScriptRuntime.find()?.executable.path ?? "neither Node.js nor the Harness desktop app found")")
         let agents = settings.agents.map { $0.enabled ? $0.id : $0.id + " (off)" }
         print("Agents: \(agents.isEmpty ? "none" : agents.joined(separator: ", "))")
         // A ledger of its own, so the report below reads the transcripts as the application does.

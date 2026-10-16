@@ -143,6 +143,80 @@ final class ScreenHUDPointerTests: XCTestCase {
         XCTAssertGreaterThan(hud.island.panel.frame.height, hud.geometry.islandFrame.height)
     }
 
+    /// The usage panel can turn shorter under the pointer that is using it. The place it gave up still counts as
+    /// hovering until the pointer moves out of it.
+    @MainActor
+    func testAPointerInThePlaceAShorterPanelGaveUpStillHovers() {
+        let tall = CGRect(x: 500, y: 300, width: 540, height: 780), short = CGRect(x: 500, y: 540, width: 540, height: 540)
+        let onTheBar = CGPoint(x: 950, y: 380), onThePanel = CGPoint(x: 950, y: 700), away = CGPoint(x: 950, y: 200)
+        XCTAssertTrue(ScreenHUD.hovers(onThePanel, region: short, held: nil, usagePanelOpen: true))
+        XCTAssertFalse(ScreenHUD.hovers(onTheBar, region: short, held: nil, usagePanelOpen: true), "it was never on the panel")
+        XCTAssertTrue(ScreenHUD.hovers(onTheBar, region: short, held: tall, usagePanelOpen: true), "found on the panel before it shrank")
+        XCTAssertFalse(ScreenHUD.hovers(away, region: short, held: tall, usagePanelOpen: true), "out of the place the panel gave up")
+        XCTAssertFalse(ScreenHUD.hovers(onTheBar, region: short, held: tall, usagePanelOpen: false),
+                       "the marks, an event's wings and its card keep their own regions")
+        XCTAssertTrue(ScreenHUD.hovers(onThePanel, region: short, held: tall, usagePanelOpen: false))
+    }
+
+    /// Discard takes away what an unsaved layout added. Pressed while the draft is the taller one, it leaves the
+    /// pointer below the panel, which must not close under the hand that pressed it.
+    @MainActor
+    func testAPanelThatALayoutMakesShorterUnderThePointerStaysOpenUntilThePointerLeaves() async throws {
+        _ = NSApplication.shared
+        let screen = try XCTUnwrap(NSScreen.main)
+        let domain = "app.agenthud.tests.pointer-layout.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let settings = SettingsStore(defaults: defaults, defaultAgents: DemoData.agents)
+        settings.update {
+            $0.screens[ScreenIdentity.key(for: screen)] = ScreenPlacement(mode: .notch)
+            $0.requiresOptionToOpen = false
+            $0.hoverDelayMs = 0
+            $0.collapseDelayMs = 0
+        }
+        // Saved: every section hidden, so only the footer is left, whatever the display's height allows the panel.
+        // The draft is the default view, a tall one.
+        let layout = settings.panelLayout
+        layout.propose(PanelLayout(hiddenSections: [.blocks, .tokens, .sessions]))
+        layout.save()
+        layout.propose(PanelLayout())
+        XCTAssertTrue(layout.hasDraft)
+        let store = UsageStore(provider: DemoUsageProvider(), settings: settings)
+        store.replace(report: DemoUsageProvider.report(agents: settings.agents, historyHours: UsageStore.historyHours, now: Date()))
+        let outside = CGPoint(x: screen.frame.minX + 20, y: screen.frame.minY + 20)
+        let pointer = TestPointerLocation(outside)
+        let hud = ScreenHUD(key: ScreenIdentity.key(for: screen), screen: screen, store: store,
+                            settings: settings, mouseLocation: { pointer.point })
+        defer { hud.close() }
+        func open() -> Bool { hud.island.rootView.isOpen }
+
+        pointer.point = CGPoint(x: hud.geometry.rect.midX, y: hud.geometry.rect.midY)
+        hud.samplePointer()
+        await settle()
+        XCTAssertTrue(open())
+        let tall = hud.island.panel.frame
+        // On the draft's bar: above the 14 pt inset, the footer and the spacing under the bar.
+        pointer.point = CGPoint(x: tall.midX + 180, y: tall.minY + 75)
+        hud.samplePointer()
+        XCTAssertTrue(open())
+
+        layout.discard()
+        let deadline = Date().addingTimeInterval(5)
+        while hud.island.panel.frame.height > tall.height - 100, open(), Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(25))
+            hud.samplePointer()
+        }
+        await settle()
+        hud.samplePointer()
+        XCTAssertTrue(open(), "the panel is still open under the pointer that discarded the draft")
+        XCTAssertLessThan(hud.island.panel.frame.height, tall.height - 100, "and it is the shorter, saved layout")
+        XCTAssertFalse(ScreenHUD.containsPointer(pointer.point, in: hud.island.panel.frame), "the pointer is below it now")
+
+        pointer.point = outside
+        hud.samplePointer()
+        await waitForCollapse(hud)
+    }
+
     @MainActor
     private func settle() async {
         try? await Task.sleep(for: .seconds(IslandAnimation.duration + 0.15))

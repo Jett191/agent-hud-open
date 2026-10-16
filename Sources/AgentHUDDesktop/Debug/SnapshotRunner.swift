@@ -169,6 +169,7 @@ public enum SnapshotRunner {
         settings.update { $0.glowStyle = .blur; $0.glowEffect = .breathe }
         save("island-expanded-dark", IslandScene(store: store, settings: settings, open: true, light: false), folder: folder, scheme: .dark)
         save("island-expanded-light", IslandScene(store: store, settings: settings, open: true, light: true), folder: folder, scheme: .light)
+        saveLayouts(preferences: settings.settings, folder: folder)
         // Session titles and token counts remain separate controls, including unavailable and failed returns.
         if let codex = settings.agents.first(where: { $0.vendor == "Codex" }) {
             let saved = settings.settings
@@ -198,12 +199,14 @@ public enum SnapshotRunner {
         save("island-scroll-bottom", scrollScene, folder: folder, scheme: .dark, scrollToBottom: true)
         save("menubar-dark", MenuBarStrip(store: store, light: false), folder: folder, scheme: .dark)
         save("menubar-light", MenuBarStrip(store: store, light: true), folder: folder, scheme: .light)
-        for tab in SettingsTab.allCases {
+        // Experimental's stills stand in for this Mac's clients (`saveExperimental`).
+        for tab in SettingsTab.allCases where tab != .experimental {
             save("settings-\(tab.slug)-dark", SettingsView(settings: settings, store: store, initialTab: tab).frame(width: SettingsWindowLayout.size.width, height: SettingsWindowLayout.size.height), folder: folder, scheme: .dark)
             save("settings-\(tab.slug)-light", SettingsView(settings: settings, store: store, initialTab: tab).frame(width: SettingsWindowLayout.size.width, height: SettingsWindowLayout.size.height), folder: folder, scheme: .light)
             save("settings-\(tab.slug)-small-dark", SettingsView(settings: settings, store: store, initialTab: tab).frame(width: SettingsWindowLayout.minimum.width, height: SettingsWindowLayout.minimum.height), folder: folder, scheme: .dark)
         }
         saveAgentSettings(settings: settings, store: store, folder: folder)
+        saveExperimental(settings: settings, store: store, folder: folder)
         saveGrokQuota(settings: settings, store: store, folder: folder)
         save("settings-display-bottom-dark", SettingsView(settings: settings, store: store, initialTab: .display).frame(width: SettingsWindowLayout.size.width, height: SettingsWindowLayout.size.height), folder: folder, scheme: .dark, scrollToBottom: true)
         save("settings-display-small-bottom-dark", SettingsView(settings: settings, store: store, initialTab: .display).frame(width: SettingsWindowLayout.minimum.width, height: SettingsWindowLayout.minimum.height), folder: folder, scheme: .dark, scrollToBottom: true)
@@ -725,12 +728,12 @@ public enum SnapshotRunner {
     }
 
     /// A store of sample data on the demo's clock, the one every report here is built on.
-    private static func demoStore(_ settings: SettingsStore) -> UsageStore {
+    static func demoStore(_ settings: SettingsStore) -> UsageStore {
         UsageStore(provider: DemoUsageProvider(), settings: settings, clock: { DemoClock.now })
     }
 
-    private static func save<V: View>(_ name: String, _ view: V, folder: URL, scheme: ColorScheme,
-                                     scrollToBottom: Bool = false, scrollOffset: CGFloat? = nil) {
+    static func save<V: View>(_ name: String, _ view: V, folder: URL, scheme: ColorScheme,
+                              scrollToBottom: Bool = false, scrollOffset: CGFloat? = nil) {
         // Limit visual rechecks to the changed surface, e.g. AGENTHUD_SNAPSHOT_PREFIX=settings-.
         if let prefix = ProcessInfo.processInfo.environment["AGENTHUD_SNAPSHOT_PREFIX"], !name.hasPrefix(prefix) { return }
         // Default sizing options so the hosting view reports SwiftUI's ideal size; then freeze it.
@@ -840,6 +843,15 @@ struct IslandScene: View {
     var failedListedSessionID: String? = nil
     /// A fixed effect time for the dot and ASCII glow styles.
     var glowTime: Double? = nil
+    /// The key of the screen whose layout the panel and the glow follow; nil follows the shared layout and every agent.
+    var screen: String? = nil
+
+    /// The glow beside the notch: every agent's, or the agents the screen's layout lists.
+    private var glowAppearance: GlowAppearance {
+        guard let screen else { return store.glowAppearance(light: light) }
+        return ScreenAgents(store: store, listed: settings.panelLayout.effective(for: screen).hud.agents, mode: .notch)
+            .glowAppearance(light: light, on: screen)
+    }
 
     private var panelHeight: CGFloat {
         if showsAlertDetails, let alert {
@@ -859,15 +871,18 @@ struct IslandScene: View {
             return hosting.fittingSize.height
         }
         let hosting = NSHostingView(rootView: HoverPanelView(store: store, onOpenStats: {}, alert: alert,
-                                                            failedListedSessionID: failedListedSessionID)
-            .frame(width: IslandController.expandedWidth).fixedSize(horizontal: false, vertical: true))
+                                                            failedListedSessionID: failedListedSessionID, screen: screen)
+            .frame(width: panelWidth).fixedSize(horizontal: false, vertical: true))
         return max(80, min(hosting.fittingSize.height, maximumPanelHeight))
     }
+
+    /// The whole panel's width in the layout the screen draws, as the island gives it.
+    private var panelWidth: CGFloat { CGFloat(settings.panelLayout.effective(for: screen).style.panelWidth) }
 
     var body: some View {
         let cameraWidth: CGFloat = alert == nil ? 380 : 216
         let closedHeight: CGFloat = alert == nil ? 44 : 38
-        let islandSize = open ? CGSize(width: showsAlertDetails ? (alert?.detailWidth ?? IslandController.alertDetailWidth) : IslandController.expandedWidth, height: panelHeight)
+        let islandSize = open ? CGSize(width: showsAlertDetails ? (alert?.detailWidth ?? IslandController.alertDetailWidth) : panelWidth, height: panelHeight)
             : alert != nil ? CGSize(width: cameraWidth + 2 * (IslandController.alertWingWidth + IslandController.alertSidePadding), height: closedHeight)
             : CGSize(width: cameraWidth, height: closedHeight)
         let radius: CGFloat = open ? IslandController.expandedRadius : 14
@@ -901,26 +916,33 @@ struct IslandScene: View {
             .background(Color(.sRGB, red: 20 / 255, green: 20 / 255, blue: 24 / 255, opacity: 0.55))
 
             GlowPreview(
-                appearance: store.glowAppearance(light: light),
-                settings: settings.settings.glow,
+                appearance: glowAppearance,
+                settings: settings.effectiveGlow(on: screen),
                 islandSize: islandSize,
                 islandRadius: radius
             )
             .environment(\.glowFrozenTime, glowTime ?? 0.9)
-            .frame(width: 720, alignment: .top)
-            IslandRootView(
-                store: store, isOpen: open,
-                collapsedSize: CGSize(width: cameraWidth + NotchGeometry.collapsedTopRadius * 2, height: closedHeight),
-                collapsedTopRadius: NotchGeometry.collapsedTopRadius, collapsedBottomRadius: 14,
-                lightBorder: light, onOpenStats: {}, alert: alert, failedListedSessionID: failedListedSessionID,
-                waitingRequests: waitingRequests, sessionEvents: sessionEvents,
-                showsAlertDetails: showsAlertDetails, presentationSize: islandSize
-            )
+            .frame(width: max(720, islandSize.width + 2 * flare + 40), alignment: .top)
+            island(cameraWidth: cameraWidth, closedHeight: closedHeight, size: islandSize)
                 .frame(width: islandSize.width + flare * 2, height: islandSize.height)
                 .shadow(color: Color.black.opacity(0.35), radius: 15, y: 8)
         }
-        .frame(width: 720, height: max(390, islandSize.height + 36))
+        .frame(width: max(720, islandSize.width + 2 * flare + 40), height: max(390, islandSize.height + 36))
         .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func island(cameraWidth: CGFloat, closedHeight: CGFloat, size: CGSize) -> IslandRootView {
+        var root = IslandRootView(
+            store: store, isOpen: open,
+            collapsedSize: CGSize(width: cameraWidth + NotchGeometry.collapsedTopRadius * 2, height: closedHeight),
+            collapsedTopRadius: NotchGeometry.collapsedTopRadius, collapsedBottomRadius: 14,
+            lightBorder: light, onOpenStats: {}, alert: alert, failedListedSessionID: failedListedSessionID,
+            waitingRequests: waitingRequests, sessionEvents: sessionEvents,
+            showsAlertDetails: showsAlertDetails, presentationSize: size
+        )
+        root.panelScreen = screen
+        root.panelWidth = panelWidth
+        return root
     }
 }
 
@@ -974,10 +996,12 @@ struct LogoQueueScene: View {
     var menuBar: CGFloat = 24
     var marks: [LogoQueueItem]?
     var width: CGFloat = 640
+    /// The key of the screen whose layout's agents the queue and its backdrop follow.
+    var screen: String = ""
 
     var body: some View {
         LogoQueuePreview(settings: settings, store: store, placement: placement,
-                         metrics: ScreenMetrics(menuBar: menuBar, notch: nil), marks: marks)
+                         metrics: ScreenMetrics(menuBar: menuBar, notch: nil), screen: screen, marks: marks)
             // The preview measures itself against the space it is given; a snapshot has to name one.
             .frame(width: width, height: 132)
             .padding(24)

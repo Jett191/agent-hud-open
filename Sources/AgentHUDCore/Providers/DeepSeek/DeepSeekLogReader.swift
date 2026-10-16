@@ -77,11 +77,19 @@ enum DeepSeekLogReader {
 public enum DeepSeekNode {
     public static func run(script: String, arguments: [String], environment: [String: String] = [:],
                            timeout: TimeInterval = 30) async throws -> Data {
-        guard let node = DeepSeekLocator.nodeExecutable() else {
-            throw UsageProviderError(L10n.text("读取 Harness 数据需要 Node.js", "Node.js is required to read Harness data"))
+        try await run(script: script, arguments: arguments, environment: environment, timeout: timeout,
+                      runtime: DeepSeekScriptRuntime.find())
+    }
+
+    static func run(script: String, arguments: [String], environment: [String: String] = [:], timeout: TimeInterval = 30,
+                    runtime: DeepSeekScriptRuntime?) async throws -> Data {
+        guard let runtime else {
+            throw UsageProviderError(L10n.text("读取 Harness 数据需要 Node.js 或 Harness 桌面版",
+                                               "Reading Harness data needs Node.js or the Harness desktop app"))
         }
         // A truncated log would parse as a different one, so output beyond the cap fails the read.
-        let output = try await ChildProcess.run(node, ["-e", script] + arguments, environment: environment,
+        let output = try await ChildProcess.run(runtime.executable, ["-e", script] + arguments,
+                                                environment: environment.merging(runtime.environment) { $1 },
                                                 timeout: timeout, stdoutLimit: 256 * 1024 * 1024)
         guard output.status == 0, !output.truncated else {
             throw UsageProviderError(L10n.text("Harness 数据读取失败，请检查本机安装和 Node.js 版本", "Cannot read Harness data; check the local install and Node.js version"))

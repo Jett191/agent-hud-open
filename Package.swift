@@ -16,7 +16,8 @@ let package = Package(
         .target(name: "AgentHUDDesktop", dependencies: ["AgentHUDCore"], resources: [.process("Resources")], swiftSettings: [.swiftLanguageMode(.v6)]),
         .executableTarget(name: "AgentHUDOpenApp", dependencies: ["AgentHUDDesktop", "AgentHUDCore"], swiftSettings: [.swiftLanguageMode(.v6)]),
         .testTarget(name: "AgentHUDSupportTests", dependencies: ["AgentHUDSupport"]),
-        .testTarget(name: "AgentHUDCoreTests", dependencies: ["AgentHUDCore", "AgentHUDSupport"]),
+        .testTarget(name: "AgentHUDCoreTests", dependencies: ["AgentHUDCore", "AgentHUDSupport"],
+                    resources: [.copy("Providers/Kit/Zstandard/Fixtures")]),
         .testTarget(name: "AgentHUDDesktopTests", dependencies: ["AgentHUDDesktop"]),
     ]
 )

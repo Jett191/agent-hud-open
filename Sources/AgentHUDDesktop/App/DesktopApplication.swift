@@ -9,6 +9,7 @@ public final class DesktopApplication {
     public let store: UsageStore
     private let options: DesktopLaunchOptions
     private let additionalSettingsPages: [DesktopSettingsPage]
+    private let experimentalSettings: [DesktopSettingsSection]
     private let additionalMenuItems: () -> [NSMenuItem]
     private let additionalHUDControls: @MainActor (@escaping @MainActor () -> Void) -> AnyView
     private let onIslandEvents: ((IslandEventTracker.Update, UsageReport, Date) -> Void)?
@@ -24,18 +25,23 @@ public final class DesktopApplication {
     private let antigravityApprovals = AntigravityPermissionObserver()
     private let deepseekQuestions = DeepSeekQuestionObserver()
     private let codexDesktopApprovals = CodexDesktopPermissionObserver()
+    /// Where the MCP process a client started hands its tool calls to this copy of the application, open while the
+    /// switch in Settings → Experimental is on.
+    private var toolChannel: AgentToolsChannel?
     private var notch: IslandController?
     private var statusItem: StatusItemController?
     private lazy var settingsWindow = SettingsWindowController(
-        settings: settings, store: store, additionalPages: additionalSettingsPages
+        settings: settings, store: store, additionalPages: additionalSettingsPages, experimentalSections: experimentalSettings
     )
     private lazy var statsWindow = StatsWindowController(store: store)
     private let onboardingWindow: OnboardingWindowController
 
     /// `onIslandEvents` receives every island event check after the island has presented it, including checks that
-    /// found nothing, with the report and time the check used.
+    /// found nothing, with the report and time the check used. `experimentalSettings` are drawn on the built-in
+    /// Experimental page, below its own rows, in the order given.
     public init(options: DesktopLaunchOptions, settings: SettingsStore, store: UsageStore,
                 additionalSettingsPages: [DesktopSettingsPage] = [],
+                experimentalSettings: [DesktopSettingsSection] = [],
                 additionalMenuItems: @escaping () -> [NSMenuItem] = { [] },
                 additionalHUDControls: @escaping @MainActor (@escaping @MainActor () -> Void) -> AnyView = { _ in AnyView(EmptyView()) },
                 onIslandEvents: ((IslandEventTracker.Update, UsageReport, Date) -> Void)? = nil) {
@@ -43,6 +49,7 @@ public final class DesktopApplication {
         self.settings = settings
         self.store = store
         self.additionalSettingsPages = additionalSettingsPages
+        self.experimentalSettings = experimentalSettings
         self.additionalMenuItems = additionalMenuItems
         self.additionalHUDControls = additionalHUDControls
         self.onIslandEvents = onIslandEvents
@@ -142,6 +149,28 @@ public final class DesktopApplication {
             demoScript = DemoScriptRunner.load(name, store: store, island: notch)
         }
         if !options.demo { PermissionRequests.shared.start() } else if demoScript == nil { PermissionRequests.shared.seedDemo() }
+        if options.toolChannel != .never {
+            // A demo shares the data directory with the real copy, so it takes the tool calls only when asked to; any
+            // other launch takes them while the switch in Settings → Experimental is on. A screen's panel is drawn and
+            // measured as that display's island draws it, off screen; the shared layout as the main display's.
+            let renderer = { @MainActor [weak self] (scope: PanelLayoutScope) -> PanelPictureRenderer? in
+                guard let self else { return nil }
+                return PanelPictureRenderer(store: self.store, display: self.notch?.panelDisplay(for: scope.screenKey) ?? .main,
+                                            screen: scope.screenKey)
+            }
+            // A screen's resting HUD is drawn as Settings previews it, off screen, with that display's notch.
+            let hud = { @MainActor [weak self] (key: String) -> HUDPicture? in
+                guard let self else { return nil }
+                let display = NSScreen.screens.first { ScreenIdentity.key(for: $0) == key }
+                return HUDPictureRenderer(store: self.store, screen: key, hasNotch: display.map(ScreenIdentity.hasNotch) ?? false,
+                                          metrics: ScreenMetrics(screen: display)).picture()
+            }
+            let tools = PanelTools(store: store, screens: { [weak self] in self?.notch?.panelScreens ?? [] },
+                                   picture: { renderer($0)?.picture() }, fit: { renderer($0)?.fit() }, hud: hud)
+            let channel = AgentToolsChannel(channel: MCPAppChannel { tools.answer($0) }, settings: settings, mode: options.toolChannel)
+            toolChannel = channel
+            channel.start()
+        }
         if !options.demo {
             antigravityApprovals.setEnabled(settings.settings.clientHooks)
             deepseekQuestions.setEnabled(settings.settings.clientHooks)
@@ -163,6 +192,7 @@ public final class DesktopApplication {
         codexDesktopApprovals.stop()
         // Quitting must never leave a client waiting on an answer that is no longer coming.
         PermissionRequests.shared.stop()
+        toolChannel?.stop()
         demoScript?.stop()
         recorder?.finishAndWait()
         store.stop()

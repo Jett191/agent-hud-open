@@ -35,9 +35,13 @@ final class IslandWindowController {
         var natural = view
         natural.presentationSize = nil
         natural.presentationFrame = nil
-        let content = AnyView(natural.content.fixedSize(horizontal: false, vertical: true))
-        // The full panel only exists for this measurement; hovering never keeps a hidden UI alive.
-        let measurement = NSHostingView(rootView: content)
+        return Self.naturalHeight(of: natural.content)
+    }
+
+    /// The height `content` takes at the width it sets itself, laid out in a hosting view that is never shown. The
+    /// full panel only exists for this measurement; hovering never keeps a hidden UI alive.
+    static func naturalHeight(of content: some View) -> CGFloat {
+        let measurement = NSHostingView(rootView: AnyView(content.fixedSize(horizontal: false, vertical: true)))
         return measurement.fittingSize.height
     }
 

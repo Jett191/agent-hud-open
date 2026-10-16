@@ -5,6 +5,9 @@ public struct UsageInsights: Hashable, Codable, Sendable {
     public let burnRatePctPerHour: Double?
     /// Seconds until this quota window is exhausted at its recent burn rate.
     public let timeToExhaust: TimeInterval?
+    /// How far the readings have come while they are too few for a burn rate; nil once there is one. Optional so
+    /// reports written before sampling details were introduced still decode.
+    public let sampling: QuotaSampling?
     public let weeklyCapHits: Int
     public let weeklyWaitTotal: TimeInterval
     public let weeklyWaitLongest: TimeInterval
@@ -16,10 +19,12 @@ public struct UsageInsights: Hashable, Codable, Sendable {
         weeklyCapHits: Int,
         weeklyWaitTotal: TimeInterval,
         weeklyWaitLongest: TimeInterval,
-        weeklyWaitLongestAt: Date?
+        weeklyWaitLongestAt: Date?,
+        sampling: QuotaSampling? = nil
     ) {
         self.burnRatePctPerHour = burnRatePctPerHour
         self.timeToExhaust = timeToExhaust
+        self.sampling = sampling
         self.weeklyCapHits = weeklyCapHits
         self.weeklyWaitTotal = weeklyWaitTotal
         self.weeklyWaitLongest = weeklyWaitLongest
@@ -95,6 +100,10 @@ public struct UsageReport: Hashable, Codable, Sendable {
     public let sessionUsage: [String: SessionUsage]?
     /// Every model's tokens today and over the last seven and thirty days; `usage` covers only the charts' week.
     public let periods: UsagePeriods?
+    /// Prompt tokens calls sent again because the cache no longer held them, in `usage`'s periods, by model: cache writes
+    /// where the call wrote to the cache, input otherwise (`UsageLedger.recachedBuckets(since:)`). It covers every
+    /// session's calls, listed or not. Nil in a report that does not read them.
+    public let recached: [UsageBucket]?
     /// When a provider last reported each row of `discoveredAgents`, in reports kept across passes; a single read and the
     /// demo have none. Rows it does not list are not shown, and a row unseen for the retention period leaves the report.
     public let rowSeenAt: [String: Date]?
@@ -125,10 +134,12 @@ public struct UsageReport: Hashable, Codable, Sendable {
         forgottenAccountProviders: Set<String>? = nil,
         sessionUsage: [String: SessionUsage]? = nil,
         periods: UsagePeriods? = nil,
+        recached: [UsageBucket]? = nil,
         rowSeenAt: [String: Date]? = nil
     ) {
         self.sessionUsage = sessionUsage
         self.periods = periods
+        self.recached = recached
         self.rowSeenAt = rowSeenAt
         self.accounts = accounts
         self.forgottenAccountProviders = forgottenAccountProviders

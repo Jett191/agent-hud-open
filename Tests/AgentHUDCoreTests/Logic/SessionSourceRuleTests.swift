@@ -332,6 +332,75 @@ final class SessionSourceRuleTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(alone.sessions.map(\.isLive), [true], "without a quiet running turn the table is not read")
     }
 
+    /// A turn whose process outlives it is vouched for by the process check, not by its log: quiet for 40 minutes, it is
+    /// still live, dated by when the table was read, which the 30-second recheck moves and a read between rechecks does not.
+    func testAQuietDeepSeekTurnWhoseProcessLivesIsVouchedForByTheProcessCheck() async throws {
+        let root = try directory()
+        try write(harness([("turn/start", ["turn": 1], -2400)], id: "quiet"), to: root.appendingPathComponent("work/quiet/session.jsonl"),
+                  modified: at(-2400))
+        let clock = Clock(base), harnessStarted = at(-3000)
+        let provider = DeepSeekUsageProvider(directory: root, transcripts: DeepSeekTranscriptStore(root: root),
+                                             readProcessStarts: { [harnessStarted] }, clock: { clock.now })
+        func session() async throws -> LiveSession {
+            let sessions = try await provider.fetchUsage(agents: [], historyHours: 24).sessions
+            return try XCTUnwrap(sessions.first)
+        }
+        let first = try await session()
+        XCTAssertNil(first.endedAt)
+        XCTAssertEqual(first.observedAt, base, "the process check is the newest evidence")
+        XCTAssertTrue(first.isLive(at: base), "a log quiet for 40 minutes does not make the turn out of date")
+        clock.now = at(29)
+        let between = try await session()
+        XCTAssertEqual(between, first, "a read between two checks finds no new evidence")
+        clock.now = at(30)
+        let rechecked = try await session()
+        XCTAssertEqual(rechecked.observedAt, at(30))
+        XCTAssertTrue(rechecked.isLive(at: at(30)))
+    }
+
+    // MARK: Evidence
+
+    /// A session is dated by the newest evidence its source holds, which reading an unchanged log again does not move:
+    /// two passes over the same logs give the same sessions, in flight or not, and a session in flight stays vouched for
+    /// from its log's last line.
+    func testTwoPassesOverUnchangedLogsGiveTheSameSessions() async throws {
+        let claudeRoot = try directory().appendingPathComponent("projects", isDirectory: true)
+        func claudeLine(_ session: String, _ type: String, _ message: String, at offset: TimeInterval) -> String {
+            #"{"sessionId":"\#(session)","cwd":"/p","type":"\#(type)","message":\#(message),"timestamp":"\#(stamp(offset))"}"#
+        }
+        func prompt(_ session: String, at offset: TimeInterval) -> String {
+            claudeLine(session, "user", #"{"role":"user","content":"Build it"}"#, at: offset)
+        }
+        func assistant(_ session: String, stop: String, at offset: TimeInterval) -> String {
+            claudeLine(session, "assistant", #"{"id":"m\#(Int(offset))","role":"assistant","model":"claude-opus-5-5","content":[{"type":"text","text":"…"}],"stop_reason":"\#(stop)","usage":{"input_tokens":1,"output_tokens":1}}"#,
+                       at: offset)
+        }
+        try write([prompt("idle", at: -900), assistant("idle", stop: "end_turn", at: -890)],
+                  to: claudeRoot.appendingPathComponent("-p/idle.jsonl"), modified: at(-890))
+        try write([prompt("busy", at: -300), assistant("busy", stop: "tool_use", at: -240)],
+                  to: claudeRoot.appendingPathComponent("-p/busy.jsonl"), modified: at(-240))
+        let codexRoot = try directory()
+        try write(rolloutLines([(codexStart("t1"), -900), (["type": "task_complete", "turn_id": "t1"], -890)]),
+                  to: codexRoot.appendingPathComponent("rollout-idle.jsonl"), modified: at(-890))
+        let clock = Clock(base)
+        let claude = ClaudeCodeProvider(engine: nil, transcripts: ClaudeTranscriptStore(roots: [claudeRoot]), history: QuotaHistoryStore(),
+                                        clock: { clock.now })
+        let codex = CodexUsageProvider(readLimits: { throw UsageProviderError("signed out") },
+                                       transcripts: CodexTranscriptStore(roots: [codexRoot]), history: QuotaHistoryStore(), clock: { clock.now })
+        let claudeBefore = try await claude.fetchUsage(agents: [], historyHours: 24).sessions
+        let codexBefore = try await codex.fetchUsage(agents: [], historyHours: 24).sessions
+        XCTAssertEqual(claudeBefore.map(\.id), ["busy", "idle"])
+        XCTAssertEqual(claudeBefore.map(\.observedAt), [at(-240), at(-890)], "each is dated by its log's last line")
+        XCTAssertEqual(codexBefore.map(\.observedAt), [at(-890)])
+        clock.now = at(600)
+        let claudeAfter = try await claude.fetchUsage(agents: [], historyHours: 24).sessions
+        let codexAfter = try await codex.fetchUsage(agents: [], historyHours: 24).sessions
+        XCTAssertEqual(claudeAfter, claudeBefore, "ten minutes on, unchanged logs give the same sessions")
+        XCTAssertEqual(codexAfter, codexBefore)
+        XCTAssertTrue(try XCTUnwrap(claudeAfter.first).isLive(at: clock.now), "a tool call keeps its session vouched for")
+        XCTAssertFalse(try XCTUnwrap(claudeAfter.first).isLive(at: at(1560)), "for half an hour after the log's last line")
+    }
+
     // MARK: Clients whose logs and Stop hooks report turns
 
     private func turn(_ state: SessionTurn.State, observed offset: TimeInterval, id: String = "t", provider: String = "Grok",

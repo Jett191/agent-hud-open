@@ -29,16 +29,34 @@ enum AntigravityService {
     /// What `permissionEndpoints` last found, shared by the polls that follow each other.
     static let remembered = Remembered(lifetime: discoveryInterval) { try await permissionEndpoints() }
 
-    static func running() async throws -> [Candidate] {
-        candidates(try await ProviderCommand.run("/bin/ps", ["-U", String(getuid()), "-o", "pid=,command="]))
+    /// Whether Antigravity or agy is on this Mac: one of its apps, or a folder either keeps its data in. Without one
+    /// there is no service to look for, so the user's processes are not listed at all.
+    static func isPresent(home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                          environment: [String: String] = ProcessInfo.processInfo.environment,
+                          applications: URL = URL(fileURLWithPath: "/Applications", isDirectory: true)) -> Bool {
+        let places = AntigravitySessions.installPaths.map { home.appendingPathComponent($0) }
+            + AntigravitySessions.roots(home: home, environment: environment)
+            + [home.appendingPathComponent(".gemini/antigravity-ide"), home.appendingPathComponent("Applications/Antigravity IDE.app")]
+            + ["Antigravity.app", "Antigravity IDE.app"].map { applications.appendingPathComponent($0) }
+        return places.contains { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    /// The running CLIs and servers, from a listing of the user's processes, taken only while `isPresent` says so.
+    static func running(
+        isPresent: @Sendable () -> Bool = { AntigravityService.isPresent() },
+        inspect: @Sendable (String, [String]) async throws -> String = ProviderCommand.run
+    ) async throws -> [Candidate] {
+        guard isPresent() else { return [] }
+        return candidates(try await inspect("/bin/ps", ["-U", String(getuid()), "-o", "pid=,command="]))
     }
 
     /// Only services advertising their local credentials can supply an authenticated native approval snapshot.
     /// A failed inspection is unknown, rather than proof that one of their prompts has disappeared.
     static func permissionEndpoints(
+        isPresent: @Sendable () -> Bool = { AntigravityService.isPresent() },
         inspect: @Sendable (String, [String]) async throws -> String = ProviderCommand.run
     ) async throws -> [Endpoint] {
-        let running = candidates(try await inspect("/bin/ps", ["-U", String(getuid()), "-o", "pid=,command="]))
+        let running = try await running(isPresent: isPresent, inspect: inspect)
         var found: [Endpoint] = []
         for candidate in running where !candidate.token.isEmpty || !(candidate.extensionToken ?? "").isEmpty {
             try Task.checkCancellation()

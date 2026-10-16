@@ -197,7 +197,8 @@ public struct SessionUsageRequest: Hashable, Sendable {
 /// before them, sub-agents' calls included; calls before the first prompt form a turn of their own. A call in the
 /// session's own log that reads back less than half of the previous call's prompt from the cache and sends at least
 /// half of it again re-cached that prompt: the cache had lapsed or the model changed. A compaction shrinks the prompt
-/// instead, so it re-caches nothing.
+/// instead, so it re-caches nothing. Calls are priced together per model and tier (`ListPricing`), once the session is
+/// built, since a long session with busy sub-agents is read again on every pass.
 struct SessionUsageBuilder {
     struct Call {
         let timestamp: Date
@@ -219,7 +220,8 @@ struct SessionUsageBuilder {
     private var context: Int?
     private var window: Int?
     private var latestAgent: String?
-    private var listCost: Decimal? = 0
+    private var pricing = ListPricing()
+    private var listTally = ListPricing.Tally()
     /// The prompt of the latest call in the session's own log.
     private var previousPrompt: Int?
     private struct TurnSums {
@@ -227,7 +229,7 @@ struct SessionUsageBuilder {
         var tokens = SessionUsage.Tokens(), calls = 0
         var subagents: SessionUsage.Tokens?
         var context: Int?, peak = 0, recached = 0
-        var listCost: Decimal? = 0
+        var listTally = ListPricing.Tally()
     }
     private var turns: [Int: TurnSums] = [:]
     private var promptIndex = -1
@@ -266,8 +268,8 @@ struct SessionUsageBuilder {
             latestAgent = call.agentId
             if let reported = call.contextWindow { window = reported }
         }
-        let cost = ModelCatalog.cost(agentId: call.agentId, kinds: tokens.kinds)?.amount
-        listCost = listCost.flatMap { sum in cost.map { sum + $0 } }
+        let kinds = tokens.kinds, group = pricing.group(of: call.agentId, call: kinds)
+        listTally.add(kinds, in: group)
         guard !prompts.isEmpty else { return }
         while promptIndex + 1 < prompts.count, prompts[promptIndex + 1] <= call.timestamp { promptIndex += 1 }
         var turn = turns[promptIndex] ?? TurnSums(start: promptIndex >= 0 ? prompts[promptIndex] : call.timestamp, end: call.timestamp)
@@ -280,19 +282,21 @@ struct SessionUsageBuilder {
             turn.peak = max(turn.peak, prompt)
         }
         turn.recached += recached
-        turn.listCost = turn.listCost.flatMap { sum in cost.map { sum + $0 } }
+        turn.listTally.add(kinds, in: group)
         turns[promptIndex] = turn
     }
 
     /// - window: the context window of the latest model given what the client reported, or nil.
     func build(costs: [String: Decimal]?, window resolve: (_ agentId: String, _ reported: Int?) -> Int?) -> SessionUsage {
         let compacted = Set(compactions.map { date in (prompts.lastIndex { $0 <= date } ?? -1) })
-        let all = turns.keys.sorted().map { index in
+        // Only the turns a breakdown keeps are priced.
+        let indices = turns.keys.sorted()
+        let kept = indices.suffix(SessionUsage.turnLimit).map { index in
             let turn = turns[index]!
             return SessionUsage.Turn(start: turn.start, end: turn.end, tokens: turn.tokens, calls: turn.calls, contextTokens: turn.context,
                                      compacted: compacted.contains(index), subagents: turn.subagents,
                                      peakContextTokens: turn.context.flatMap { turn.peak > $0 ? turn.peak : nil },
-                                     recachedTokens: turn.recached > 0 ? turn.recached : nil, listCost: turn.listCost)
+                                     recachedTokens: turn.recached > 0 ? turn.recached : nil, listCost: pricing.cost(of: turn.listTally))
         }
         return SessionUsage(
             models: models.map { SessionUsage.Model(agentId: $0.key, tokens: $0.value) }.sorted {
@@ -303,7 +307,7 @@ struct SessionUsageBuilder {
                 periods[start]!.keys.sorted().map { SessionUsage.Period(start: start, agentId: $0, tokens: periods[start]![$0]!) }
             },
             subagents: subagents, calls: calls, contextTokens: context, costs: costs,
-            turns: Array(all.suffix(SessionUsage.turnLimit)), turnCount: all.count,
-            contextWindow: latestAgent.flatMap { resolve($0, window) }, listCost: listCost)
+            turns: kept, turnCount: indices.count,
+            contextWindow: latestAgent.flatMap { resolve($0, window) }, listCost: pricing.cost(of: listTally))
     }
 }

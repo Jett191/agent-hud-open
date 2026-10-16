@@ -63,33 +63,38 @@ final class CodexDesktopPermissionObserverTests: XCTestCase {
         observer.stop()
     }
 
-    func testLongThreadRestsTenTimesItsReadAndKeepsItsCardMeanwhile() throws {
-        let queue = PermissionRequests(), observer = CodexDesktopPermissionObserver(requests: queue, client: .init())
-        let long = try pending(threadID: "long"), ids: Set = ["long", "short"]
-        XCTAssertEqual(observer.due(ids, at: 100), ids)
-        observer.reconcile(.init(pending: [long], observedThreadIDs: ids, readSeconds: ["long": 0.7, "short": 0.1]), at: 100)
-        XCTAssertEqual(observer.due(ids, at: 102), ["short"], "the next pass asks only the thread that answered quickly")
-        observer.reconcile(.init(pending: [], observedThreadIDs: ["short"], readSeconds: ["short": 0.1]), resting: ["long"], at: 102)
-        XCTAssertEqual(queue.pending, [long.request], "a thread that was not asked keeps its card")
-        XCTAssertEqual(observer.due(ids, at: 106), ["short"])
-        XCTAssertEqual(observer.due(ids, at: 107), ids)
-        observer.reconcile(.init(pending: [], observedThreadIDs: ids, readSeconds: ["long": 0.7, "short": 0.1]), at: 107)
-        XCTAssertTrue(queue.pending.isEmpty, "the next reading of the long thread withdraws what Desktop answered")
-        XCTAssertEqual(observer.due(["short"], at: 107.5), [])
-        XCTAssertEqual(observer.due(ids, at: 107.6), ["long"], "a thread that left the list starts without a rest")
+    func testAThreadIsFollowedWhileItsSessionIsInFlightOrACardOfItsWaits() throws {
+        let client = CodexDesktopPermissions(dataDirectory: URL(fileURLWithPath: "/private/tmp/agenthud-missing-\(UUID().uuidString)"))
+        let queue = PermissionRequests(), observer = CodexDesktopPermissionObserver(requests: queue, client: client)
+        func session(_ id: String) -> LiveSession {
+            .init(id: id, agentId: "codex", task: "Task", terminal: nil, startedAt: Date(), endedAt: nil, pctOfWindow: nil,
+                  tokensIn: 0, tokensOut: 0, navigationTarget: .codexThread(id: id))
+        }
+        observer.updateSessions([session("running")], at: 100)
+        XCTAssertEqual(client.stream.following, [], "an observer that is off follows nothing")
+        observer.setEnabled(true)
+        XCTAssertEqual(client.stream.following, ["running"])
+        let item = try pending(threadID: "asked")
+        observer.reconcile(.init(pending: [item], observedThreadIDs: ["asked"]))
+        observer.updateSessions([], at: 102)
+        XCTAssertEqual(client.stream.following, ["running", "asked"],
+                       "a turn that ended is followed a while longer: the next one would have the whole state sent again")
+        observer.updateSessions([], at: 100 + CodexDesktopPermissionObserver.linger)
+        XCTAssertEqual(client.stream.following, ["asked"], "a card outlives the session that raised it")
+        observer.reconcile(.init(pending: [], observedThreadIDs: ["asked"]))
+        XCTAssertEqual(client.stream.following, [], "once Desktop settles the card there is nothing left to hear of")
         observer.stop()
     }
 
-    func testFailedReadingHidesItsCardThroughTheRestThatFollows() throws {
+    func testAThreadWhoseStateIsUnknownHidesItsCardUntilItIsKnownAgain() throws {
         let queue = PermissionRequests(), observer = CodexDesktopPermissionObserver(requests: queue, client: .init())
         let item = try pending()
-        observer.reconcile(.init(pending: [item], observedThreadIDs: [item.threadID], readSeconds: [item.threadID: 0.1]), at: 100)
-        observer.reconcile(.init(pending: [], observedThreadIDs: [], readSeconds: [item.threadID: 3]), at: 102)
-        XCTAssertTrue(queue.pending.isEmpty)
-        XCTAssertEqual(observer.due([item.threadID], at: 131), [])
-        observer.reconcile(.init(pending: [], observedThreadIDs: []), resting: [item.threadID], at: 104)
-        XCTAssertTrue(queue.pending.isEmpty, "a rest carries over what was shown, and a failed reading showed nothing")
-        XCTAssertEqual(observer.due([item.threadID], at: 132), [item.threadID])
+        let waiting = CodexDesktopPermissions.Snapshot(pending: [item], observedThreadIDs: [item.threadID])
+        observer.reconcile(waiting)
+        observer.reconcile(.init(pending: [], observedThreadIDs: []))
+        XCTAssertTrue(queue.pending.isEmpty, "a connection that dropped says nothing, and a card nobody can answer is not shown")
+        observer.reconcile(waiting)
+        XCTAssertEqual(queue.pending, [item.request], "the request was never settled, so it returns with the state")
         observer.stop()
     }
 

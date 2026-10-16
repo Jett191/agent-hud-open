@@ -10,7 +10,10 @@ final class SettingsNavigation {
 }
 
 enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, sources, display
+    case general, sources, display, experimental
+
+    /// The pages before a host's own; Experimental comes after them.
+    static let leading: [SettingsTab] = [.general, .sources, .display]
 
     var id: String { rawValue }
     var slug: String { rawValue }
@@ -20,6 +23,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: return L10n.text("通用", "General")
         case .sources: return L10n.text("智能体", "Agents")
         case .display: return L10n.text("显示", "Display")
+        case .experimental: return L10n.text("实验选项", "Experimental")
         }
     }
 
@@ -28,6 +32,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: return L10n.text("设置外观、语言、启动方式和客户端回调。", "Appearance, language, startup and client hook preferences.")
         case .sources: return L10n.text("管理实时状态、套餐与显示窗口。", "Manage live status, plans and visible windows.")
         case .display: return L10n.text("自定义灵动岛光晕与面板内容，更改自动生效。", "Customize your notch and panel. Changes apply automatically.")
+        case .experimental: return L10n.text("仍在验证的功能，以后可能会变。", "Features still being tested. They may change.")
         }
     }
 
@@ -36,6 +41,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: return "gearshape.fill"
         case .sources: return "puzzlepiece.extension.fill"
         case .display: return "display"
+        case .experimental: return "flask.fill"
         }
     }
 
@@ -44,6 +50,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: return Color(hex: 0x8e8e93)
         case .sources: return Color(hex: 0x30b0c7)
         case .display: return Color(hex: 0x7c65e8)
+        case .experimental: return Color(hex: 0xff9500)
         }
     }
 }
@@ -60,18 +67,28 @@ struct SettingsView: View {
     var sourceStatuses: [SourceStatus]?
     var initialProviderID: String?
     let additionalPages: [DesktopSettingsPage]
+    /// A host's rows on the Experimental page, a host page with that page's id among them.
+    let experimentalSections: [DesktopSettingsSection]
+    /// The Experimental page's install row, given where a test or a still stands in for this Mac.
+    var clientSetup: MCPClientSetup?
     @State private var navigation: SettingsNavigation
     @Environment(\.colorScheme) private var scheme
 
     init(settings: SettingsStore, store: UsageStore, initialTab: SettingsTab = .display,
          navigation: SettingsNavigation? = nil,
          additionalPages: [DesktopSettingsPage] = [],
+         experimentalSections: [DesktopSettingsSection] = [],
+         clientSetup: MCPClientSetup? = nil,
          sourceStatuses: [SourceStatus]? = nil, initialProviderID: String? = nil) {
         self.settings = settings
         self.store = store
         self.sourceStatuses = sourceStatuses
         self.initialProviderID = initialProviderID
-        self.additionalPages = additionalPages
+        let builtIn = Set(SettingsTab.allCases.map(\.id))
+        self.additionalPages = additionalPages.filter { !builtIn.contains($0.id) }
+        self.experimentalSections = experimentalSections + additionalPages.filter { $0.id == SettingsTab.experimental.id }
+            .map { page in DesktopSettingsSection(id: page.id) { page.content() } }
+        self.clientSetup = clientSetup
         _navigation = State(initialValue: navigation ?? SettingsNavigation(tab: initialTab))
     }
 
@@ -135,6 +152,7 @@ struct SettingsView: View {
             case .sources: SourcesPane(settings: settings, store: store, theme: theme, sources: sourceStatuses,
                                        initialProviderID: initialProviderID)
             case .display: DisplayPane(settings: settings, store: store, theme: theme)
+            case .experimental: ExperimentalPane(settings: settings, theme: theme, additions: experimentalSections, setup: clientSetup)
             }
         } else if let additionalPage {
             additionalPage.content()
@@ -155,11 +173,14 @@ struct SettingsSidebar: View {
                 .foregroundStyle(theme.secondary)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
-            ForEach(SettingsTab.allCases) { tab in
+            ForEach(SettingsTab.leading) { tab in
                 pageButton(id: tab.id, title: tab.label, symbol: tab.symbol, color: tab.color)
             }
             ForEach(additionalPages) { page in
                 pageButton(id: page.id, title: page.title(), symbol: page.symbol, color: page.color)
+            }
+            ForEach(SettingsTab.allCases.filter { !SettingsTab.leading.contains($0) }) { tab in
+                pageButton(id: tab.id, title: tab.label, symbol: tab.symbol, color: tab.color)
             }
             Spacer()
             HStack(spacing: 10) {
