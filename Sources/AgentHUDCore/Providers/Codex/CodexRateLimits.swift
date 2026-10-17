@@ -117,7 +117,7 @@ public struct CodexRateLimits: Decodable, Sendable {
             return windows.map { slot, window -> Row in
                 let period = WindowNames.Period(seconds: window.duration), secondary = slot == "secondary"
                 let limit = Self.limitName(period, secondary: secondary)
-                let alone = period?.shortName ?? (secondary ? L10n.text("次要额度", "Secondary") : L10n.text("额度", "Usage"))
+                let alone = period?.shortName ?? (secondary ? "Secondary" : "Usage")
                 let short = word.map { windows.count > 1 ? "\($0) \(period?.afterWord ?? alone)" : $0 } ?? alone
                 // The shared primary window keeps the old placeholder's id as its window key, preserving preferences.
                 let rowId = id == "codex" && slot == "primary" ? "codex" : "codex:\(id):\(slot)"
@@ -136,15 +136,15 @@ public struct CodexRateLimits: Decodable, Sendable {
     /// 5 %, in Chinese in the Mac's words.
     static func limitName(_ period: WindowNames.Period?, secondary: Bool) -> String {
         switch period {
-        case .fiveHours: L10n.text("5 小时额度", "5h limit")
-        case .day: L10n.text("每日额度", "Daily limit")
-        case .week: L10n.text("每周额度", "Weekly limit")
-        case .month: L10n.text("每月额度", "Monthly limit")
-        case .year: L10n.text("每年额度", "Annual limit")
-        case .days(let count): L10n.text("\(count) 天额度", "\(count)d limit")
-        case .hours(let count): L10n.text("\(count) 小时额度", "\(count)h limit")
-        case .minutes(let count): L10n.text("\(count) 分钟额度", "\(count)m limit")
-        case nil: secondary ? L10n.text("次要用量额度", "Secondary usage limit") : L10n.text("用量额度", "Usage limit")
+        case .fiveHours: "5h limit"
+        case .day: "Daily limit"
+        case .week: "Weekly limit"
+        case .month: "Monthly limit"
+        case .year: "Annual limit"
+        case .days(let count): "\(count)d limit"
+        case .hours(let count): "\(count)h limit"
+        case .minutes(let count): "\(count)m limit"
+        case nil: secondary ? "Secondary usage limit" : "Usage limit"
         }
     }
 }

@@ -13,8 +13,7 @@ final class QuotaCellLayoutTests: XCTestCase {
     private static let languages: [AppLanguage] = [.en, .zhHans]
     private var stores: [AppLanguage: UsageStore] = [:]
 
-    /// The sample in `language`, worded in it as a provider words the windows it reads, over settings of its own. The
-    /// interface speaks `language` from here on.
+    /// The sample's English quota names over settings of its own; the rest of the interface speaks `language`.
     private func sample(_ language: AppLanguage) -> UsageStore {
         L10n.setLanguage(language)
         if let known = stores[language] { return known }
@@ -49,6 +48,18 @@ final class QuotaCellLayoutTests: XCTestCase {
     /// The sample's six quota windows in `language`, which the tests set side by side one to six at a time.
     private func sampleWindows(_ language: AppLanguage) -> [AgentRow] {
         Array(sample(language).rows.filter { $0.usedPct != nil }.prefix(6))
+    }
+
+    /// An explicitly long short name keeps wrapping coverage independent of a provider's compact wording.
+    private func wrappingWindow(_ language: AppLanguage) throws -> AgentRow {
+        let row = try XCTUnwrap(sampleWindows(language).first { $0.agent.shortName == "Spark 7d" })
+        let old = row.agent
+        let agent = AgentDescriptor(id: old.id, vendor: old.vendor, model: old.model, shortModel: "Spark Weekly",
+                                    source: old.source, enabled: old.enabled, connected: old.connected,
+                                    billingPool: old.billingPool, account: old.account, allModels: old.allModels)
+        return AgentRow(agent: agent, remainingPct: row.remainingPct, level: row.level, resetAt: row.resetAt,
+                        weeklyRemainingPct: row.weeklyRemainingPct, paletteIndex: row.paletteIndex,
+                        account: row.account, assessment: row.assessment)
     }
 
     /// How a block sets out its windows: in which language, at which content width, how many to a line, as rings of
@@ -212,12 +223,11 @@ final class QuotaCellLayoutTests: XCTestCase {
     // MARK: Nothing cut
 
     /// A window's name is never cut: its full name fits the cell on one line, or its short name does, or every word of
-    /// its short name does, which then wraps whole. Chinese short names such as "Spark 每周" are too long for one line in
-    /// six columns of an agent's own panel.
-    func testNoWindowNameIsCut() {
+    /// its short name does, which then wraps whole. The explicit long-name fixture exercises a wrapped short name.
+    func testNoWindowNameIsCut() throws {
         var wrapped: [String] = []
         for language in Self.languages {
-            let windows = sampleWindows(language)
+            let windows = sampleWindows(language) + [try wrappingWindow(language)]
             for width in widths {
                 for columns in PanelLayout.Block.columnRange {
                     let room = QuotaCellGrid<EmptyView>.cellWidth(in: width, columns: columns)
@@ -235,13 +245,13 @@ final class QuotaCellLayoutTests: XCTestCase {
                 }
             }
         }
-        XCTAssertFalse(wrapped.isEmpty, "the sample has a Chinese short name that takes two lines in six narrow columns")
+        XCTAssertFalse(wrapped.isEmpty, "the explicit long short name takes two lines in six narrow columns")
     }
 
     /// A short name too long for one line wraps whole, and the cell is as tall in every measure with it.
     func testAWrappedNameKeepsTheCellAsTallInEveryMeasure() throws {
         let windows = sampleWindows(.zhHans)
-        let row = try XCTUnwrap(windows.first { $0.agent.shortName == "Spark 每周" }, "\(windows.map(\.agent.shortName))")
+        let row = try wrappingWindow(.zhHans)
         let single = try XCTUnwrap(windows.first { $0.agent.shortName == "Spark 5h" })
         let room = QuotaCellGrid<EmptyView>.cellWidth(in: widths[1], columns: 6)
         let line = NSHostingView(rootView: Text("Spark").font(.ui(12, .medium)).fixedSize()).fittingSize.height

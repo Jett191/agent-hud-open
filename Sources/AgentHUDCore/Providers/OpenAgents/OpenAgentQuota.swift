@@ -57,7 +57,7 @@ struct OpenAgentQuotaClient: Sendable {
             let usages = root["usages"]
             let current: [(field: String, key: String, name: (full: String, short: String), duration: Double?)] = [
                 ("limit_5h", "limit:TIME_UNIT_MINUTE:300.0", kimiName(.fiveHours), 18000), ("limit_7d", "weekly", kimiName(.week), 604800),
-                ("limit_month_total", "monthly", (L10n.text("月总额度", "Monthly total quota"), WindowNames.Period.month.shortName), nil),
+                ("limit_month_total", "monthly", ("Monthly total quota", WindowNames.Period.month.shortName), nil),
             ]
             for window in current {
                 guard let ratio = numeric(usages[window.field]["used_ratio"]) else { continue }
@@ -85,9 +85,9 @@ struct OpenAgentQuotaClient: Sendable {
             guard root["usage"].objectValue != nil else { throw ProviderFailure.format }
             // OpenCode's names for Go's limits; the service calls the 5 hours rolling.
             let names: [String: (full: String, short: String)] = [
-                "rolling": (L10n.text("5 小时限制", "5-hour limit"), WindowNames.Period.fiveHours.shortName),
-                "weekly": (L10n.text("每周限制", "Weekly limit"), WindowNames.Period.week.shortName),
-                "monthly": (L10n.text("每月限制", "Monthly limit"), WindowNames.Period.month.shortName),
+                "rolling": ("5-hour limit", WindowNames.Period.fiveHours.shortName),
+                "weekly": ("Weekly limit", WindowNames.Period.week.shortName),
+                "monthly": ("Monthly limit", WindowNames.Period.month.shortName),
             ]
             for key in ["rolling", "weekly", "monthly"] {
                 let value = root["usage"][key]
@@ -149,38 +149,38 @@ struct OpenAgentQuotaClient: Sendable {
     static func kimiName(_ period: WindowNames.Period?) -> (full: String, short: String) {
         let full: String
         switch period {
-        case .fiveHours: full = L10n.text("5 小时额度", "5-hour quota")
-        case .week: full = L10n.text("周额度", "Weekly quota")
-        case .day: full = L10n.text("每日额度", "Daily quota")
-        case .month: full = L10n.text("月额度", "Monthly quota")
-        case .year: full = L10n.text("年额度", "Annual quota")
-        case .days(let count): full = L10n.text("\(count) 天额度", "\(count)-day quota")
-        case .hours(let count): full = L10n.text("\(count) 小时额度", "\(count)-hour quota")
-        case .minutes(let count): full = L10n.text("\(count) 分钟额度", "\(count)-minute quota")
-        case nil: full = L10n.text("额度", "Quota")
+        case .fiveHours: full = "5-hour quota"
+        case .week: full = "Weekly quota"
+        case .day: full = "Daily quota"
+        case .month: full = "Monthly quota"
+        case .year: full = "Annual quota"
+        case .days(let count): full = "\(count)-day quota"
+        case .hours(let count): full = "\(count)-hour quota"
+        case .minutes(let count): full = "\(count)-minute quota"
+        case nil: full = "Quota"
         }
-        return (full, period?.shortName ?? L10n.text("额度", "Quota"))
+        return (full, period?.shortName ?? "Quota")
     }
 
     /// Zhipu's names for a GLM plan's limits: credits over 5 hours and a week on plans that meter credits, the 5-hour and
     /// weekly limits of older plans, and their monthly MCP usage. A limit of a unit Zhipu does not name keeps its type.
     static func glmName(_ type: String, period: WindowNames.Period?, monthly: Bool) -> (full: String, short: String) {
-        if type == "TIME_LIMIT" { return (monthly ? L10n.text("MCP 每月用量", "MCP usage (1 month)") : L10n.text("MCP 用量", "MCP usage"), "MCP") }
+        if type == "TIME_LIMIT" { return (monthly ? "MCP usage (1 month)" : "MCP usage", "MCP") }
         let credits = type == "CREDIT_LIMIT"
         guard let period else { return (type, credits ? "Credits" : "Tokens") }
         let full: String
         switch period {
-        case .fiveHours: full = credits ? L10n.text("5 小时积分", "5-hour credits") : L10n.text("每 5 小时限额", "5-hour limit")
-        case .week: full = credits ? L10n.text("每周积分", "Weekly credits") : L10n.text("每周限额", "Weekly limit")
-        case .day: full = credits ? L10n.text("每日积分", "Daily credits") : L10n.text("每日限额", "Daily limit")
-        case .month: full = credits ? L10n.text("每月积分", "Monthly credits") : L10n.text("每月限额", "Monthly limit")
-        case .year: full = credits ? L10n.text("每年积分", "Annual credits") : L10n.text("每年限额", "Annual limit")
+        case .fiveHours: full = credits ? "5-hour credits" : "5-hour limit"
+        case .week: full = credits ? "Weekly credits" : "Weekly limit"
+        case .day: full = credits ? "Daily credits" : "Daily limit"
+        case .month: full = credits ? "Monthly credits" : "Monthly limit"
+        case .year: full = credits ? "Annual credits" : "Annual limit"
         case .days(let count):
-            full = credits ? L10n.text("\(count) 天积分", "\(count)-day credits") : L10n.text("每 \(count) 天限额", "\(count)-day limit")
+            full = credits ? "\(count)-day credits" : "\(count)-day limit"
         case .hours(let count):
-            full = credits ? L10n.text("\(count) 小时积分", "\(count)-hour credits") : L10n.text("每 \(count) 小时限额", "\(count)-hour limit")
+            full = credits ? "\(count)-hour credits" : "\(count)-hour limit"
         case .minutes(let count):
-            full = credits ? L10n.text("\(count) 分钟积分", "\(count)-minute credits") : L10n.text("每 \(count) 分钟限额", "\(count)-minute limit")
+            full = credits ? "\(count)-minute credits" : "\(count)-minute limit"
         }
         return (full, period.shortName)
     }

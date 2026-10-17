@@ -80,23 +80,22 @@ public enum L10n {
     public static let windowWeekly = "window.weekly"
     public static let windowWeeklyPrefix = "window.weekly."
 
-    /// Full row label, in Anthropic's words for Claude's windows: "当前会话" / "Current session", "每周限制 · 所有模型" /
-    /// "Weekly limit · All models", "每周限制 · Fable" / "Weekly limit · Fable"; real model names pass through.
+    /// Quota window names stay in English for the Mac and every device that reads its data. Model names pass through.
     public static func modelLabel(_ model: String) -> String {
-        if model == "Desktop / CLI" || model == "CLI" { return text("账户额度", "Account quota") }
-        if model == windowSession { return text("当前会话", "Current session") }
-        if model == windowWeekly { return text("每周限制 · 所有模型", "Weekly limit · All models") }
+        if model == "Desktop / CLI" || model == "CLI" { return "Account quota" }
+        if model == windowSession { return "Current session" }
+        if model == windowWeekly { return "Weekly limit · All models" }
         if model.hasPrefix(windowWeeklyPrefix) {
             let family = model.dropFirst(windowWeeklyPrefix.count)
-            return text("每周限制 · \(family)", "Weekly limit · \(family)")
+            return "Weekly limit · \(family)"
         }
         return model
     }
 
-    /// Short form for tight places (`WindowNames`): "5h", "每周" / "Weekly", a family's weekly window by the family alone
+    /// Short form for tight places (`WindowNames`): "5h", "Weekly", a family's weekly window by the family alone
     /// ("Fable"), and a model by its first word ("Opus 4.5" → "Opus").
     public static func shortModelLabel(_ model: String) -> String {
-        if model == "Desktop / CLI" || model == "CLI" { return text("额度", "Quota") }
+        if model == "Desktop / CLI" || model == "CLI" { return "Quota" }
         if model == windowSession { return WindowNames.Period.fiveHours.shortName }
         if model == windowWeekly { return WindowNames.Period.week.shortName }
         if model.hasPrefix(windowWeeklyPrefix) { return WindowNames.leading(String(model.dropFirst(windowWeeklyPrefix.count))) }

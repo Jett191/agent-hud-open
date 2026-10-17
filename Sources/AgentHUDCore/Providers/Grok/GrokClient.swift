@@ -135,9 +135,9 @@ struct GrokClient: Sendable {
             return
         }
         let source = cliWallets.contains(wallet) ? cliWindow : nativeWindow
-        quota.windows.append(.init(id: "grok:extra", label: L10n.text("额外用量", "Extra usage"),
+        quota.windows.append(.init(id: "grok:extra", label: "Extra usage",
             remaining: wallet.usedPercent.map(QuotaMath.remaining(usedPercent:)), reset: source?.reset, duration: source?.duration,
-            shortLabel: L10n.text("额外用量", "Extra"), observedAt: wallet.observedAt))
+            shortLabel: "Extra", observedAt: wallet.observedAt))
         if quota.quotaWindowIDs != nil { quota.quotaWindowIDs = Set(quota.windows.map(\.id)) }
     }
 
@@ -199,9 +199,9 @@ struct GrokClient: Sendable {
         // xAI's weekly usage limit, which its billing service can also report by the month.
         let label: String, short: String
         switch period["type"].stringValue {
-        case "USAGE_PERIOD_TYPE_WEEKLY": (label, short) = (L10n.text("每周用量额度", "Weekly usage limit"), WindowNames.Period.week.shortName)
-        case "USAGE_PERIOD_TYPE_MONTHLY": (label, short) = (L10n.text("每月用量额度", "Monthly usage limit"), WindowNames.Period.month.shortName)
-        default: (label, short) = (L10n.text("用量额度", "Usage limit"), L10n.text("用量", "Usage"))
+        case "USAGE_PERIOD_TYPE_WEEKLY": (label, short) = ("Weekly usage limit", WindowNames.Period.week.shortName)
+        case "USAGE_PERIOD_TYPE_MONTHLY": (label, short) = ("Monthly usage limit", WindowNames.Period.month.shortName)
+        default: (label, short) = ("Usage limit", "Usage")
         }
         let used = config["creditUsagePercent"].numberValue.flatMap { $0 >= 0 ? $0 : nil }
         quota.windows.append(.init(id: "grok", label: label, remaining: used.map(QuotaMath.remaining(usedPercent:)), reset: end,
@@ -221,9 +221,9 @@ struct GrokClient: Sendable {
             if wallet.limit == 0 {
                 quota.quotaWindowIDs = Set(quota.windows.map(\.id))
             } else {
-                quota.windows.append(.init(id: "grok:extra", label: L10n.text("额外用量", "Extra usage"),
+                quota.windows.append(.init(id: "grok:extra", label: "Extra usage",
                     remaining: wallet.usedPercent.map(QuotaMath.remaining(usedPercent:)), reset: end, duration: duration,
-                    shortLabel: L10n.text("额外用量", "Extra")))
+                    shortLabel: "Extra"))
             }
         }
         return quota

@@ -56,9 +56,9 @@ enum GrokBotQuota {
         let reset = ProviderDate.milliseconds(usage["nextResetMs"])
         guard usage.objectValue?["nextResetMs"] == .null || reset != nil else { return nil }
         // A Bot slot may be an auth id or an email fallback. It cannot establish equality with a CLI user id.
-        var quota = ProviderQuota(windows: [.init(id: "grok", label: trial ? L10n.text("试用额度", "Trial usage limit")
-            : L10n.text("每周用量额度", "Weekly usage limit"), remaining: used.map(QuotaMath.remaining(usedPercent:)), reset: reset,
-            duration: trial ? nil : TimeInterval(7 * 86400), shortLabel: trial ? L10n.text("试用", "Trial") : WindowNames.Period.week.shortName)],
+        var quota = ProviderQuota(windows: [.init(id: "grok", label: trial ? "Trial usage limit"
+            : "Weekly usage limit", remaining: used.map(QuotaMath.remaining(usedPercent:)), reset: reset,
+            duration: trial ? nil : TimeInterval(7 * 86400), shortLabel: trial ? "Trial" : WindowNames.Period.week.shortName)],
             plan: usage["grokPlanLabel"].stringValue,
             account: .unresolved(provider: "Grok", home: "grok-bot:" + RecordCoding.hash([accountSlot])),
             label: "Grok Bot", observedAt: readAt, client: "Grok Bot")
@@ -75,9 +75,9 @@ enum GrokBotQuota {
             if wallet.limit == 0 {
                 quota.quotaWindowIDs = Set(quota.windows.map(\.id))
             } else {
-                quota.windows.append(.init(id: "grok:extra", label: L10n.text("额外用量", "Extra usage"),
+                quota.windows.append(.init(id: "grok:extra", label: "Extra usage",
                     remaining: wallet.usedPercent.map(QuotaMath.remaining(usedPercent:)), reset: reset,
-                    shortLabel: L10n.text("额外用量", "Extra"), observedAt: wallet.observedAt))
+                    shortLabel: "Extra", observedAt: wallet.observedAt))
             }
         }
         return quota

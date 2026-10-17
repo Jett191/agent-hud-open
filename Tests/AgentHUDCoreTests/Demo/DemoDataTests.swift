@@ -35,16 +35,15 @@ final class DemoDataTests: XCTestCase {
         XCTAssertEqual(Set(DemoData.everyAgent.map(\.id)).count, DemoData.everyAgent.count)
     }
 
-    /// Codex's provider words its windows in the interface's language when it reads them, so rows saved in one language
-    /// come back named in the other.
-    func testRowsSavedInOneLanguageAreReportedInTheCurrentOne() {
+    /// Saved quota rows keep their English names when the interface changes language.
+    func testSavedQuotaRowsStayEnglishAfterTheInterfaceLanguageChanges() {
         let saved = DemoData.agents
         L10n.setLanguage(.zhHans)
         let reported = report(saved).discoveredAgents
         XCTAssertEqual(reported.map(\.id), saved.map(\.id))
-        XCTAssertEqual(reported[3].model, "每周额度")
+        XCTAssertEqual(reported[3].model, "Weekly limit")
         XCTAssertEqual(reported[4].shortName, "Spark 5h")
-        XCTAssertEqual(reported[4].model, "GPT-5.3-Codex-Spark · 5 小时额度")
+        XCTAssertEqual(reported[4].model, "GPT-5.3-Codex-Spark · 5h limit")
         let other = AgentDescriptor(id: "newcomer", vendor: "Newcomer", model: "Plan", source: "", enabled: false)
         XCTAssertEqual(report([other]).discoveredAgents, [other], "A row that is not the sample's is reported as given")
     }

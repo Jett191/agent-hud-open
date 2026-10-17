@@ -85,15 +85,15 @@ actor CursorClient {
         // first-party, so the short name says so, where "Cursor Models" would read as the whole vendor; the other pool,
         // third-party models, follows. The two pools each limit some of the plan's models; the rest are plan-wide.
         let rows: [(String, String, String, Double?)] = [
-            ("cursor", L10n.text("包含用量", "Included usage"), L10n.text("包含用量", "Included"), main),
-            ("cursor:models", L10n.text("Cursor 模型", "Cursor Models"), L10n.text("第一方模型", "First-party"),
+            ("cursor", "Included usage", "Included", main),
+            ("cursor:models", "Cursor Models", "First-party",
              plan["autoPercentUsed"].numberValue),
-            ("cursor:third-party", L10n.text("其他模型", "Other Models"), L10n.text("第三方模型", "Third-party"),
+            ("cursor:third-party", "Other Models", "Third-party",
              plan["apiPercentUsed"].numberValue),
-            ("cursor:personal", L10n.text("个人支出限额", "Individual spending limit"), L10n.text("支出限额", "Spend limit"),
+            ("cursor:personal", "Individual spending limit", "Spend limit",
              ratio(json["individualUsage"]["overall"])),
-            ("cursor:team", L10n.text("共享用量", "Pooled usage"), L10n.text("共享用量", "Pooled"), ratio(json["teamUsage"]["pooled"])),
-            ("cursor:extra", L10n.text("按需用量", "On-demand usage"), L10n.text("按需用量", "On-demand"),
+            ("cursor:team", "Pooled usage", "Pooled", ratio(json["teamUsage"]["pooled"])),
+            ("cursor:extra", "On-demand usage", "On-demand",
              ratio(json["individualUsage"]["onDemand"]))
         ]
         for (id, label, short, used) in rows {

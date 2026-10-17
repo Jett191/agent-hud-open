@@ -77,7 +77,7 @@ struct AntigravityClient: Sendable {
                   let duration = snapshots.first(where: { $0.agentId == agent.id })?.windowDuration else { return agent }
             let word: String?
             if agent.windowKey.hasPrefix("antigravity:gemini-") { word = "Gemini" }
-            else if agent.windowKey.hasPrefix("antigravity:3p-") { word = L10n.text("第三方", "3rd-party") }
+            else if agent.windowKey.hasPrefix("antigravity:3p-") { word = "3rd-party" }
             else { word = agent.model.range(of: " · ").map { groupWord(String(agent.model[..<$0.lowerBound])) } }
             guard let short = compactName(word: word, duration: duration, allModels: agent.allModels),
                   short != agent.shortModel else { return agent }
@@ -134,7 +134,7 @@ struct AntigravityClient: Sendable {
     /// third-party for Claude and GPT models, as Antigravity's plans describe them.
     static func groupWord(_ name: String) -> String {
         let lower = name.lowercased()
-        if lower.contains("claude") || lower.contains("gpt") { return L10n.text("第三方", "3rd-party") }
+        if lower.contains("claude") || lower.contains("gpt") { return "3rd-party" }
         return name.split(separator: " ").first.map(String.init) ?? name
     }
 

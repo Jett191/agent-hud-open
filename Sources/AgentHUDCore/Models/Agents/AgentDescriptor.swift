@@ -5,7 +5,7 @@ public struct AgentDescriptor: Hashable, Codable, Sendable, Identifiable {
     public let id: String
     public let vendor: String
     /// A model's name, or a quota window's full name in its vendor's words: Claude's windows as persisted keys that
-    /// `L10n.modelLabel(_:)` words in the current language, every other window as its provider wrote it.
+    /// `L10n.modelLabel(_:)` words in English, every other window as its provider wrote it.
     public let model: String
     /// A quota window's short name as its provider wrote it (`WindowNames`), its full name where it has none; nil for
     /// Claude's windows and models, whose short names `L10n.shortModelLabel(_:)` derives from `model`.

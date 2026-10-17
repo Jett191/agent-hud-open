@@ -79,15 +79,14 @@ struct CopilotClient: Sendable {
         return quota
     }
 
-    /// A window's names in GitHub's words and VS Code's: GitHub keeps "AI credits" in English in its Chinese docs, and
-    /// VS Code's Chinese calls the row 额度. A key GitHub has not named reads as its words, in English in both languages,
-    /// and is known in tight places by the whole of it up to eight characters, else its first word.
+    /// A window's names in GitHub's and VS Code's English words. Unknown keys read as their words, kept whole up to
+    /// eight characters in tight places, else the first word.
     static func names(_ key: String, credits: Bool = false) -> (full: String, short: String) {
-        if credits { return ("AI credits", L10n.text("额度", "Credits")) }
+        if credits { return ("AI credits", "Credits") }
         switch key {
-        case "premium_interactions": return (L10n.text("高级请求", "Premium requests"), L10n.text("高级请求", "Premium"))
-        case "chat": return (L10n.text("聊天消息", "Chat messages"), L10n.text("聊天消息", "Chat"))
-        case "completions": return (L10n.text("代码补全", "Code completions"), L10n.text("代码补全", "Completions"))
+        case "premium_interactions": return ("Premium requests", "Premium")
+        case "chat": return ("Chat messages", "Chat")
+        case "completions": return ("Code completions", "Completions")
         default:
             let name = key.replacingOccurrences(of: "_", with: " ").capitalized
             return (name, WindowNames.leading(name))

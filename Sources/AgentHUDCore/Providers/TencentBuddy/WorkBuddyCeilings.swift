@@ -136,10 +136,10 @@ struct WorkBuddyCeilings: Sendable {
     /// in the words the other plans' clients read. Its short name is the window's period (`WindowNames.Period`).
     static func label(_ window: String) -> String {
         switch window {
-        case "5h": L10n.text("5 小时使用上限", "5-hour usage limit")
-        case "day": L10n.text("每日使用上限", "Daily usage limit")
-        case "week": L10n.text("每周使用上限", "Weekly usage limit")
-        default: L10n.text("每月使用上限", "Monthly usage limit")
+        case "5h": "5-hour usage limit"
+        case "day": "Daily usage limit"
+        case "week": "Weekly usage limit"
+        default: "Monthly usage limit"
         }
     }
 }

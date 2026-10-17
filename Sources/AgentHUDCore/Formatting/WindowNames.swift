@@ -2,7 +2,8 @@ import Foundation
 
 /// How quota windows are named. A window's full name is in its vendor's own words, built by its provider; its short name,
 /// for tight places such as a Watch row or a small widget, keeps only what tells the window apart from the account's
-/// other windows, with one set of period words for every provider. A window without a short name shows its full name.
+/// other windows. Names stay in English on every device, independent of the collecting Mac's language. A window
+/// without a short name shows its full name.
 public enum WindowNames {
     /// A window's length as the vendors' clients name it: 5 hours, a day, a week, 30 days and 365 days within 5 %, as
     /// Codex's own client reads them, else whole days, hours or minutes.
@@ -26,14 +27,14 @@ public enum WindowNames {
         }
 
         /// The short name of a window that is only its period: 5h in both languages, Daily, Weekly, Monthly and Annual
-        /// (每日, 每周, 每月, 每年), and any other length as its unit (3h, 30m, 3d).
+        /// and any other length as its unit (3h, 30m, 3d).
         public var shortName: String {
             switch self {
             case .fiveHours: "5h"
-            case .day: L10n.text("每日", "Daily")
-            case .week: L10n.text("每周", "Weekly")
-            case .month: L10n.text("每月", "Monthly")
-            case .year: L10n.text("每年", "Annual")
+            case .day: "Daily"
+            case .week: "Weekly"
+            case .month: "Monthly"
+            case .year: "Annual"
             case .days(let count): "\(count)d"
             case .hours(let count): "\(count)h"
             case .minutes(let count): "\(count)m"
@@ -42,7 +43,7 @@ public enum WindowNames {
 
         /// The period after a word that names a bucket or group: in English the week is 7d, Anthropic's compact form, since
         /// a word and Weekly would no longer fit.
-        public var afterWord: String { self == .week ? L10n.text("每周", "7d") : shortName }
+        public var afterWord: String { self == .week ? "7d" : shortName }
     }
 
     /// The word a long service name is known by where no catalog names it: without its version numbers and the vendor

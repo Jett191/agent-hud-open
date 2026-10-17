@@ -123,9 +123,8 @@ final class HUDToolsTests: HUDToolsCase {
         XCTAssertEqual(changes, 0, "no tool writes the settings")
     }
 
-    /// A window's name is how the person who looks at the panel calls the row, so it follows the application's
-    /// language as the panel does; keys, notes and refusals do not.
-    func testARowIsNamedAsThePanelNamesItInTheApplicationsLanguage() throws {
+    /// Quota rows keep the panel's English names under either interface language; keys, notes and refusals stay stable.
+    func testQuotaRowsKeepEnglishNamesWhenTheInterfaceLanguageChanges() throws {
         func claude() throws -> [[String: JSONValue]] {
             (try block("Claude", in: try result(MCPTools.getHUD))["rows"]?.arrayValue ?? []).compactMap(\.objectValue)
         }
@@ -133,7 +132,7 @@ final class HUDToolsTests: HUDToolsCase {
                        [.string("Current session"), .string("Weekly limit · All models"), .string("Weekly limit · Fable")])
         let keys = try claude().map { $0["key"] }
         L10n.setLanguage(.zhHans)
-        XCTAssertEqual(try claude().map { $0["name"] }, [.string("当前会话"), .string("每周限制 · 所有模型"), .string("每周限制 · Fable")])
+        XCTAssertEqual(try claude().map { $0["name"] }, [.string("Current session"), .string("Weekly limit · All models"), .string("Weekly limit · Fable")])
         XCTAssertEqual(try claude().map { $0["key"] }, keys)
         XCTAssertEqual(try claude().compactMap { $0["name"]?.stringValue },
                        (store.rowGroups.first { $0.vendor == "Claude" }?.rows ?? []).map(\.agent.name), "as the panel's rows are named")

@@ -62,11 +62,11 @@ final class DockAnimationTests: XCTestCase {
                             message: "\(edge): a shorter card uses the same transition canvas")
             }
             try checkPositions()
-            await settle()
+            await settle(until: { hud.island.panel.frame.height < opened.height })
             XCTAssertLessThan(hud.island.panel.frame.height, opened.height)
             try checkPositions()
             hud.forceCollapse()
-            await settle()
+            await settle(until: { abs(hud.island.panel.frame.height - collapsed.height) <= 1 })
             assertFrame(hud.island.panel.frame, equals: collapsed, message: "\(edge): cleanup returns to the strip")
             try checkPositions()
         }
@@ -97,8 +97,12 @@ final class DockAnimationTests: XCTestCase {
     }
 
     @MainActor
-    private func settle() async {
+    private func settle(until condition: () -> Bool = { true }) async {
         try? await Task.sleep(for: .seconds(IslandAnimation.duration + 0.08))
+        let deadline = Date().addingTimeInterval(3)
+        while !condition(), Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
     }
 
     private func globalFrame(_ local: CGRect, canvas: CGRect) -> CGRect {
