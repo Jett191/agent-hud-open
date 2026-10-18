@@ -96,6 +96,7 @@ final class IslandHoverTests: XCTestCase {
             container.addSubview(anchor)
             window.contentView = container
             window.orderFrontRegardless()
+            anchor.mouseLocation = { [weak window] in window?.convertPoint(toScreen: CGPoint(x: 20, y: 20)) ?? .zero }
             anchor.mouseEntered(with: try event(.mouseEntered, window: window, at: CGPoint(x: 20, y: 20)))
             anchor.update(content: Text("Details"), look: look, enabled: true, isHovered: true)
             let popup = try XCTUnwrap(window.childWindows?.first, "hovering a row shows its details")
@@ -125,12 +126,63 @@ final class IslandHoverTests: XCTestCase {
     }
 
     @MainActor
+    func testMovingTheWindowUnderAStillPointerDismissesAMissedExitAfterTheUpdate() async throws {
+        _ = NSApplication.shared
+        let size = CGSize(width: 240, height: 40)
+        let window = OverlayPanel(frame: CGRect(origin: CGPoint(x: -20000, y: -20000), size: size), level: .statusBar,
+                                  acceptsMouse: true)
+        let anchor = IslandHoverAnchorView(content: Text("Details"), look: .standard)
+        anchor.frame = CGRect(origin: .zero, size: size)
+        window.contentView = anchor
+        window.orderFrontRegardless()
+        defer { anchor.dismiss(); window.orderOut(nil) }
+        let point = CGPoint(x: 20, y: 20), screenPoint = window.convertPoint(toScreen: point)
+        anchor.mouseLocation = { screenPoint }
+        var hoverChanges: [Bool] = []
+        anchor.onHover = { hoverChanges.append($0) }
+        anchor.mouseEntered(with: try event(.mouseEntered, window: window, at: point))
+        anchor.update(content: Text("Details"), look: .standard, enabled: true, isHovered: true)
+        let popup = try XCTUnwrap(window.childWindows?.first)
+        XCTAssertTrue(popup.isVisible)
+
+        // No mouseExited arrives when the entire window moves away from an unmoved screen pointer.
+        window.setFrameOrigin(window.frame.origin.applying(CGAffineTransform(translationX: 500, y: 0)))
+        anchor.update(content: Text("Details"), look: .standard, enabled: true, isHovered: true)
+        XCTAssertFalse(popup.isVisible || popup.parent != nil, "dismiss the stale popup in this update")
+        XCTAssertEqual(hoverChanges, [true], "do not publish a SwiftUI state change during the native view update")
+        await settle(anchor)
+        XCTAssertEqual(hoverChanges, [true, false], "reconcile the binding after the view update")
+    }
+
+    @MainActor
+    func testANewEnterWinsOverADeferredMissedExit() async throws {
+        _ = NSApplication.shared
+        let window = OverlayPanel(frame: CGRect(x: -20000, y: -20000, width: 240, height: 40), level: .statusBar,
+                                  acceptsMouse: true)
+        let anchor = IslandHoverAnchorView(content: Text("Details"), look: .standard)
+        anchor.frame = CGRect(x: 0, y: 0, width: 240, height: 40)
+        window.contentView = anchor
+        window.orderFrontRegardless()
+        defer { anchor.dismiss(); window.orderOut(nil) }
+        var hoverChanges: [Bool] = []
+        anchor.onHover = { hoverChanges.append($0) }
+        let inside = CGPoint(x: 20, y: 20)
+        anchor.mouseLocation = { [weak window] in window?.convertPoint(toScreen: CGPoint(x: 500, y: 20)) ?? .zero }
+        anchor.mouseEntered(with: try event(.mouseEntered, window: window, at: inside))
+        anchor.update(content: Text("Details"), look: .standard, enabled: true, isHovered: true)
+        anchor.mouseEntered(with: try event(.mouseEntered, window: window, at: inside))
+        await settle(anchor)
+        XCTAssertEqual(hoverChanges, [true, true], "a newer enter must not be cleared by the deferred exit")
+    }
+
+    @MainActor
     private func enter<Content: View>(_ anchor: IslandHoverAnchorView<Content>, in window: NSWindow) async throws -> NSWindow {
         anchor.updateTrackingAreas()
         XCTAssertTrue(anchor.trackingAreas.contains { $0.options.contains([.activeAlways, .mouseMoved]) },
                       "Pointer tracking must stay active outside the key window")
         let originalSize = window.frame.size
         let point = anchor.convert(CGPoint(x: anchor.bounds.minX + 12, y: anchor.bounds.midY), to: nil)
+        anchor.mouseLocation = { [weak window] in window?.convertPoint(toScreen: point) ?? .zero }
         anchor.mouseEntered(with: try event(.mouseEntered, window: window, at: point))
         await settle(try XCTUnwrap(window.contentView))
         let popup = try XCTUnwrap(window.childWindows?.first, "Entering a row must show an island popup")
