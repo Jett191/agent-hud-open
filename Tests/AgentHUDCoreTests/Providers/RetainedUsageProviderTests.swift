@@ -4,6 +4,17 @@ import XCTest
 final class RetainedUsageProviderTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    func testTheFirstFetchKeepsReplyRatesWhileStartingRowClocks() async throws {
+        let rates = ["quota": QuotaReplyRate(tokensPerSecond: 10, calls: 2, tokensOut: 300)]
+        let source = UsageReport(generatedAt: now, snapshots: [], sessions: [],
+            discoveredAgents: [.init(id: "quota", vendor: "Claude", model: "5h", source: "account", enabled: true)],
+            replyRates: rates)
+        let provider = RetainedUsageProvider(provider: SequenceProvider([source]))
+        let result = try await provider.fetchUsage(agents: [], historyHours: 24)
+        XCTAssertEqual(result.replyRates, rates)
+        XCTAssertEqual(result.rowSeenAt, ["quota": now])
+    }
+
     func testPartialFailureKeepsQuotaBalanceCreditsAndObservationTimes() async throws {
         let good = report(at: now, remaining: 64, balance: 12, credits: 2)
         let partial = report(at: now.addingTimeInterval(3600), remaining: nil, balance: nil, credits: nil)

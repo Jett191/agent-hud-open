@@ -109,18 +109,19 @@ public enum QuotaMath {
     /// Output tokens per second of active replying, from call events timestamped when they complete: each call's span
     /// is the gap since the previous call in its own log, capped at `replyGapCap`; longer gaps are idle and drop both
     /// the span and the call that followed them. Calls are grouped by contribution so two sessions' timelines never
-    /// borrow each other's gaps. Nil when no call pair qualifies.
+    /// borrow each other's gaps. Other models' calls keep their place in the log; only a selected consumer's later
+    /// call adds its output and span. Nil when no call pair qualifies.
     public static func replyRate(events: [UsageLedger.ReplyEvent], consumers: Set<String>) -> QuotaReplyRate? {
-        var byLog: [Int64: [(atMs: Int64, out: Int)]] = [:]
-        for event in events where consumers.contains(event.agent) {
-            byLog[event.contribution, default: []].append((event.atMs, event.out))
+        var byLog: [Int64: [UsageLedger.ReplyEvent]] = [:]
+        for event in events {
+            byLog[event.contribution, default: []].append(event)
         }
         var out = 0, span = 0.0, calls = 0
         for events in byLog.values {
             let sorted = events.sorted { $0.atMs < $1.atMs }
             for (before, after) in zip(sorted, sorted.dropFirst()) {
                 let gap = Double(after.atMs - before.atMs) / 1000
-                guard gap > 0, gap <= replyGapCap else { continue }
+                guard consumers.contains(after.agent), gap > 0, gap <= replyGapCap else { continue }
                 out += after.out
                 span += gap
                 calls += 1

@@ -447,8 +447,8 @@ public actor UsageLedger {
         return calls
     }
 
-    /// The calls these agents completed since `sinceMs`, oldest first per log: the reply-speed math times each call
-    /// by the gap since the call before it in the same contribution.
+    /// Calls since `sinceMs` in logs containing these agents, oldest first per log. Other models' calls stay as timing
+    /// context: the reply-speed math times each selected call by the call immediately before it in that contribution.
     public func replyEvents(agents: Set<String>, sinceMs: Int64) throws -> [ReplyEvent] {
         guard !agents.isEmpty else { return [] }
         var found: [ReplyEvent] = []
@@ -457,9 +457,12 @@ public actor UsageLedger {
         try storage.connection.query("""
             SELECT e.contribution_id, a.name, e.timestamp_ms, e.tokens_out FROM usage_event e
             JOIN agent a ON a.id = e.agent
-            WHERE e.timestamp_ms >= ? AND a.name IN (SELECT value FROM json_each(?))
+            WHERE e.timestamp_ms >= ? AND e.contribution_id IN (
+                SELECT selected.contribution_id FROM usage_event selected
+                JOIN agent selected_agent ON selected_agent.id = selected.agent
+                WHERE selected.timestamp_ms >= ? AND selected_agent.name IN (SELECT value FROM json_each(?)))
             ORDER BY e.contribution_id, e.timestamp_ms
-            """, [.integer(sinceMs), .text(names)]) { row in
+            """, [.integer(sinceMs), .integer(sinceMs), .text(names)]) { row in
             found.append(ReplyEvent(contribution: row.int(0), agent: row.text(1) ?? "", atMs: row.int(2), out: Int(row.int(3))))
         }
         return found

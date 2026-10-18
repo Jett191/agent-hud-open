@@ -75,7 +75,7 @@ extension UsageReport {
                     readingIssues: readingIssues, consumerIdsByQuota: consumerIdsByQuota, billing: billing, codexResetCredits: codexResetCredits,
                     codexResetCreditsObservedAt: codexResetCreditsObservedAt, completions: completions, turns: turns,
                     services: services, activeQuotaPoolIDs: activeQuotaPoolIDs, accounts: accounts,
-                    forgottenAccountProviders: forgottenAccountProviders, sessionUsage: sessionUsage,
+                    forgottenAccountProviders: forgottenAccountProviders, sessionUsage: sessionUsage, replyRates: replyRates,
                     sessionCredits: sessionCredits,
                     periods: periods,
                     recached: recached, rowSeenAt: Dictionary(discoveredAgents.map { ($0.id, generatedAt) }, uniquingKeysWith: { first, _ in first }))
