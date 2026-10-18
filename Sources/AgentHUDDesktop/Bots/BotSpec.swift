@@ -179,6 +179,7 @@ struct BotSpec: Sendable {
         "Qoder": [(RGBA(hex: 0xf8f8f8), RGBA(hex: 0x161616))],
         "CodeBuddy": [(RGBA(hex: 0xffffff), ink)],
         "WorkBuddy": [(RGBA(hex: 0xeafaf6), RGBA(hex: 0x1b2622))],
+        "Devin": [(RGBA(hex: 0xffffff), ink)],
     ]
 
     /// The light HUD's ink.
@@ -282,6 +283,9 @@ struct BotSpec: Sendable {
                           crossesEyes: true),
         "ZCode": BotSpec(reach: 0.8, shape: .slant(width: 0.66, height: 0.64, skew: 0.2, round: 0.05)),
         "Qwen": BotSpec(radius: 0.37, shape: .outline(keep: 0.55, smooth: 7), spin: 7, crossesEyes: true),
+        // The opaque tile supplies its rounded outline, with the face in its white ink and the eyes in its dark ink.
+        "Devin": BotSpec(reach: 0.55, shape: .outline(keep: 1, smooth: 5), paint: .solid(RGBA(hex: 0xffffff)),
+                         eye: Eye(across: 0.42)),
         // A plain red ball with two round black eyes and the logo's pair of small antennae. The logo's cyan
         // pupils are left out: on a face this small they stare.
         "OpenClaw": BotSpec(center: CGPoint(x: 0.5, y: 0.54), reach: 0.7,

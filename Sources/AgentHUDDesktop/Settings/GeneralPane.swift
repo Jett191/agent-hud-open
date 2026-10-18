@@ -89,18 +89,18 @@ private struct ClientHooksSetting: View {
             Text(L10n.text(
                 """
                 Agent HUD 会从各客户端的设置中移除自己添加的回调，之后也不再写回。关闭后将失去：
-                · 在 HUD 上回答 Claude Code、Codex、CodeBuddy、WorkBuddy、ZCode、Qwen Code 与 Qoder 的权限请求
+                · 在 HUD 上回答 Claude Code、Codex、CodeBuddy、WorkBuddy、ZCode、Qwen Code、Qoder 与 Devin CLI 的权限请求
                 · 在 HUD 上回答兼容的 DeepSeek Harness 网页端提问
-                · Antigravity、Cursor、GitHub Copilot CLI、CodeBuddy、Qwen Code 与 OpenCode 的完成提醒
+                · Antigravity、Cursor、GitHub Copilot CLI、CodeBuddy、Qwen Code、OpenCode 与 Devin CLI 的完成提醒
                 · Claude Code 会话的等待批准状态
                 · Pi 的运行状态与完成提醒
                 用量、额度与会话统计不受影响。重新开启后，Codex 需要在 /hooks 中再次信任。
                 """,
                 """
                 Agent HUD removes the hooks it added to each client's settings and stops adding them back. You lose:
-                • Answering permission requests from Claude Code, Codex, CodeBuddy, WorkBuddy, ZCode, Qwen Code and Qoder on the HUD
+                • Answering permission requests from Claude Code, Codex, CodeBuddy, WorkBuddy, ZCode, Qwen Code, Qoder and Devin CLI on the HUD
                 • Answering questions from compatible DeepSeek Harness web hosts on the HUD
-                • Completion reminders for Antigravity, Cursor, GitHub Copilot CLI, CodeBuddy, Qwen Code and OpenCode
+                • Completion reminders for Antigravity, Cursor, GitHub Copilot CLI, CodeBuddy, Qwen Code, OpenCode and Devin CLI
                 • The waiting-for-approval state of Claude Code sessions
                 • Running status and completion reminders for Pi
                 Usage, quota and session statistics are unaffected. Turned back on, Codex asks you to trust its hook again in /hooks.

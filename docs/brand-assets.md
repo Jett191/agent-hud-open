@@ -45,6 +45,8 @@ Grok Bot's 256 × 256 PNG is extracted unchanged from the application's icon set
 
 `devin.png` is a 256 × 256 PNG supplied by the [Devin CLI community integration](https://github.com/jazzenchen/agent-hud-open/pull/126), drawn as an original image. Its upstream artwork source has not been confirmed. The general trademark statement below applies.
 
+Its bot takes the rounded tile's outline from the same PNG, with a white body and dark eyes on a dark HUD. On a light HUD the body takes the HUD's dark ink and the eyes its light ground, through the shared bot color rules.
+
 ## Rendering rules
 
 Every logo is drawn into a 16 × 16 point image. Grok, Cursor, Kimi, Pi, GitHub Copilot, Hermes Agent and ZCode are template images (monochrome, foreground-colored); Claude, ChatGPT (tinted), Antigravity, DeepSeek, Grok Bot, GLM, OpenCode, OpenClaw, CodeBuddy, WorkBuddy, Qwen Code, Qoder and Devin are drawn as original images. SwiftUI views and the status-item menu use the same images.
