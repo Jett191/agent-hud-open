@@ -215,6 +215,19 @@ public actor UsageLedger {
         return result.sorted { ($0.start, $0.account ?? "", $0.agentId) < ($1.start, $1.account ?? "", $1.agentId) }
     }
 
+    /// Every consumer id this source ever recorded, from raw events or buckets; unbounded, for pool claiming.
+    public func consumers(source: String) throws -> Set<String> {
+        var result = Set<String>()
+        try storage.connection.query("""
+            SELECT DISTINCT a.name FROM usage_event e JOIN contribution c ON c.id = e.contribution_id
+            JOIN agent a ON a.id = e.agent WHERE c.source = ?
+            UNION SELECT a.name FROM usage_bucket b JOIN agent a ON b.agent = a.id WHERE b.source = ?
+            """, [.text(source), .text(source)]) { row in
+            if let name = row.text(0), !name.isEmpty { result.insert(name) }
+        }
+        return result
+    }
+
     /// Every model's tokens in each period ending at `now`, counted from the buckets as `buckets(since:)` returns them,
     /// with the part in DeepSeek's peak hours (`ModelCatalog.isPeak`, weekdays 9–12 and 14–18 Beijing time) apart.
     public func periods(endingAt now: Date, calendar: Calendar = .current) throws -> UsagePeriods {
