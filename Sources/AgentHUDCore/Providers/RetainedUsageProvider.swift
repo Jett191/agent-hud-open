@@ -151,7 +151,7 @@ extension UsageReport {
             subscriptions: previous.subscriptions.filter { !retiredPoolIDs.contains($0.key) }.merging(subscriptions, uniquingKeysWith: { _, new in new }),
             sourceNotices: sourceNotices, quotaNotices: quotaNotices, readingIssues: readingIssues,
             consumerIdsByQuota: previous.consumerIdsByQuota.filter { !retiredWindowIDs.contains($0.key) }
-                .merging(consumerIdsByQuota.filter { !superseded.contains($0.key) }, uniquingKeysWith: { _, new in new }),
+                .merging(consumerIdsByQuota.filter { !superseded.contains($0.key) }, uniquingKeysWith: { $0.union($1) }),
             billing: retainedBilling, codexResetCredits: codexResetCredits ?? (sameCurrentAccount(as: previous, provider: "Codex") ? previous.codexResetCredits : nil),
             codexResetCreditsObservedAt: codexResetCredits != nil ? codexResetCreditsObservedAt
                 : sameCurrentAccount(as: previous, provider: "Codex") ? previous.codexResetCreditsObservedAt : nil,
