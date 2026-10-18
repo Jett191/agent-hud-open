@@ -13,13 +13,16 @@ enum DevinSessions: LocalSessionLayout {
     static func related(_ url: URL) -> [URL] { [URL(fileURLWithPath: url.path + "-wal"), URL(fileURLWithPath: url.path + "-shm")] }
 
     /// The database keeps every stored message; the report needs the last week.
-    static func read(_ url: URL) throws -> ProviderSessions { try read(url, since: Date().addingTimeInterval(-8 * 86400)) }
+    static func read(_ url: URL) throws -> ProviderSessions {
+        let now = Date()
+        return try read(url, since: now.addingTimeInterval(-8 * 86400), now: now)
+    }
 
     /// `message_nodes` is far too large to scan whole (hundreds of thousands of multi-KB JSON rows), so the session
     /// list is bounded by `last_activity_at` and each session, most recent first, contributes only its newest nodes —
     /// the node's `row_id` index supplies the order — while the reader's time budget lasts. Sessions the budget does
     /// not reach keep their `sessions` row and report no events.
-    static func read(_ url: URL, since: Date) throws -> ProviderSessions {
+    static func read(_ url: URL, since: Date, now: Date = Date()) throws -> ProviderSessions {
         let database = try ReadOnlySQLite(url)
         try database.requireTable("sessions")
         let s = try columns("sessions", in: database)
@@ -44,12 +47,12 @@ enum DevinSessions: LocalSessionLayout {
         }
         truncated = count >= limit
 
-        // A session runs while a live process holds its lock, or while its last activity is still fresh.
-        let now = Date(), live = liveLocks(in: url.deletingLastPathComponent(), sessionIDs: Set(sessions.map(\.raw)))
+        // A lock keeps a quiet session eligible, but only the client's activity dates its turn: observing an open CLI
+        // again must not make an earlier Stop look older than new work that never happened.
+        let live = liveLocks(in: url.deletingLastPathComponent(), sessionIDs: Set(sessions.map(\.raw)))
         for index in sessions.indices {
-            let observed = live.contains(sessions[index].raw) ? now
-                : sessions[index].session.lastActivity.flatMap { now.timeIntervalSince($0) < SessionPhase.Limits.quiet ? $0 : nil }
-            guard let observed else { continue }
+            guard let observed = sessions[index].session.lastActivity,
+                  live.contains(sessions[index].raw) || now.timeIntervalSince(observed) < SessionPhase.Limits.quiet else { continue }
             sessions[index].session.turns = [SessionTurn(provider: "Devin", sessionID: sessions[index].session.id, turnID: sessions[index].raw,
                 state: .running, startedAtMs: nil, observedAtMs: RecordCoding.milliseconds(observed))]
         }
@@ -84,7 +87,8 @@ enum DevinSessions: LocalSessionLayout {
                        truncated ? ProviderFailure.limit.message : nil].compactMap { $0 }
         return ProviderSessions(sessions: sessions.map {
             var item = $0.session; item.events.sort { ($0.timestamp, $0.id) < ($1.timestamp, $1.id) }; return item
-        }, notice: notices.isEmpty ? nil : notices.joined(separator: " · "))
+        }, notice: notices.isEmpty ? nil : notices.joined(separator: " · "),
+           usageIsComplete: hasNodes && !incomplete && !truncated)
     }
 
     /// One usage event from a `message_nodes` row; nothing when the row carries no token metrics. `chat_message` text

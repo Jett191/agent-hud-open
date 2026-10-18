@@ -136,8 +136,9 @@ final class SessionLedger {
     /// - runningTotals: each event is its row's total so far, which the client adds to in place: the ledger keeps the
     ///   total the row had when it was first read at the row's own time, and dates what it gains later at the 15-minute
     ///   period `now` falls in. Only sessions the listed files hold can count this way.
+    /// - complete: false when the reader returned only part of its history; omitted events then stay in the ledger.
     func record(files: ListedFiles?, revision: Int?, account: String? = nil, window: Date, runningTotals: Bool = false,
-                now: Date = Date(), sessions: () -> [(id: String, events: [UsageEvent])],
+                complete: Bool = true, now: Date = Date(), sessions: () -> [(id: String, events: [UsageEvent])],
                 isolation: isolated (any Actor)? = #isolation) async {
         let generation = await ledger.generation
         if loadedGeneration != generation {
@@ -172,7 +173,11 @@ final class SessionLedger {
         do {
             try await ledger.write { writer in
                 for (session, events) in contributions {
-                    try writer.replace(source: source, contribution: session, account: account, events: events, since: window)
+                    if complete {
+                        try writer.replace(source: source, contribution: session, account: account, events: events, since: window)
+                    } else {
+                        try writer.upsert(source: source, contribution: session, account: account, events: events)
+                    }
                 }
                 // A row first read with a time before the window is not replaced, so it is written once here.
                 for (session, events) in firstReads {

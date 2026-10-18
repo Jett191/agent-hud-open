@@ -181,6 +181,8 @@ struct ProviderSessions: Sendable {
     /// Usage ceilings a transcript's 429 errors reported: one per session, attributed to its latest successful model.
     /// The plans behind API-reached models expose no quota endpoint, so their logged reset times are the only reading.
     var limitHits: [ProviderLimitHit] = []
+    /// A bounded or interrupted read supplies new events but cannot establish that omitted events are gone.
+    var usageIsComplete = true
 }
 
 /// One 429 ceiling a transcript logged: the model it interrupted (the session's latest successful one), the entry of the

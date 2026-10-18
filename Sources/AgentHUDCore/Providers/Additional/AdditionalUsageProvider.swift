@@ -104,7 +104,7 @@ actor AdditionalUsageProvider: UsageProvider, LedgerRecording {
         let readerStart = local.start ?? source.readerWindow.map { SessionContributions.nextDayStart(now.addingTimeInterval(-$0)) }
         let window = SessionContributions.windowStart(since, readerStart: readerStart)
         await sessionLedger.record(files: local.files, revision: local.revision, account: account, window: window,
-                                   runningTotals: source == .hermes, now: now) {
+                                   runningTotals: source == .hermes, complete: local.usageIsComplete, now: now) {
             local.sessions.map { session in (session.id, session.events.map { $0.usage(source: source) }) }
         }
     }

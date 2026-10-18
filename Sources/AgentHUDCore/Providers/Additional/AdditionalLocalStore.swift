@@ -44,6 +44,7 @@ actor AdditionalLocalStore {
             // Sessions the layout merged across files keep every file's models for them.
             models: pass.files.reduce(into: [:]) { $0.merge($1.parsed.models) { $0.union($1) } },
             apiReached: pass.files.reduce(into: Set<String>()) { $0.formUnion($1.parsed.apiReached) },
-            limitHits: pass.files.flatMap(\.parsed.limitHits))
+            limitHits: pass.files.flatMap(\.parsed.limitHits),
+            usageIsComplete: pass.files.allSatisfy(\.parsed.usageIsComplete))
     }
 }

@@ -29,6 +29,13 @@ final class DevinSessionsTests: XCTestCase, @unchecked Sendable {
             + nodes.map { "INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) VALUES (\($0));" }
         XCTAssertEqual(sqlite3_exec(handle, schema + inserts.joined(), nil, nil, nil), SQLITE_OK)
     }
+    private func execute(_ sql: String, at url: URL) throws {
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
+        let handle = try XCTUnwrap(db)
+        defer { sqlite3_close(handle) }
+        XCTAssertEqual(sqlite3_exec(handle, sql, nil, nil, nil), SQLITE_OK)
+    }
     private func sec(_ offset: Double) -> Int64 { Int64(now.timeIntervalSince1970 + offset) }
     private func iso(_ offset: Double) -> String {
         let formatter = ISO8601DateFormatter()
@@ -62,7 +69,7 @@ final class DevinSessionsTests: XCTestCase, @unchecked Sendable {
             "'s1', 6, '{\"message_id\":\"m5\",\"role\":\"assistant\",\"metadata\":{\"request_id\":\"r4\",\"metrics\":{\"total_prompt_tokens\":300,\"total_completion_tokens\":60,\"total_cached_tokens\":120}}}', \(sec(-60))",
             "'s2', 1, '\(message(id: "n1", request: "q1", model: nil, at: -100))', \(sec(-60))"
         ])
-        let result = try DevinSessions.read(url, since: now.addingTimeInterval(-86400))
+        let result = try DevinSessions.read(url, since: now.addingTimeInterval(-86400), now: now)
         XCTAssertEqual(Set(result.sessions.map(\.id)), ["devin:s1", "devin:s2"], "hidden and stale sessions are not listed")
         let first = try XCTUnwrap(result.sessions.first { $0.id == "devin:s1" })
         XCTAssertEqual(first.title, "Fix the login flow")
@@ -88,14 +95,15 @@ final class DevinSessionsTests: XCTestCase, @unchecked Sendable {
         ], nodes: [])
         try String(ProcessInfo.processInfo.processIdentifier).write(to: root.appendingPathComponent("session_locks/live.lock"), atomically: true, encoding: .utf8)
         try "2147483000".write(to: root.appendingPathComponent("session_locks/dead.lock"), atomically: true, encoding: .utf8)
-        let result = try DevinSessions.read(url, since: now.addingTimeInterval(-86400))
+        let result = try DevinSessions.read(url, since: now.addingTimeInterval(-86400), now: now)
         let live = try XCTUnwrap(result.sessions.first { $0.id == "devin:live" })
         XCTAssertEqual(live.turns.map(\.state), [.running])
+        XCTAssertEqual(live.turns.first?.observedAtMs, Int64(sec(-3600) * 1000), "a live process is not new turn activity")
         let dead = try XCTUnwrap(result.sessions.first { $0.id == "devin:dead" })
         XCTAssertTrue(dead.turns.isEmpty)
     }
 
-    func testMissingMessageNodesTableStillListsSessions() throws {
+    func testMissingMessageNodesTableStillListsSessions() async throws {
         let root = try directory()
         let url = root.appendingPathComponent("sessions.db")
         var db: OpaquePointer?
@@ -108,8 +116,67 @@ final class DevinSessionsTests: XCTestCase, @unchecked Sendable {
                 title TEXT, hidden INTEGER NOT NULL DEFAULT 0, metadata TEXT);
             INSERT INTO sessions VALUES ('s1', '/w', 'windsurf', 'm', 'bypass', \(sec(-100)), \(sec(-50)), 'T', 0, NULL);
             """, nil, nil, nil), SQLITE_OK)
-        let result = try DevinSessions.read(url, since: now.addingTimeInterval(-86400))
+        let result = try DevinSessions.read(url, since: now.addingTimeInterval(-86400), now: now)
         XCTAssertEqual(result.sessions.map(\.id), ["devin:s1"])
         XCTAssertNotNil(result.notice, "sessions without an event table get listed but say so")
+        XCTAssertFalse(result.usageIsComplete)
+        let store = AdditionalLocalStore(source: .devin, roots: [root])
+        let indexed = await store.index(since: now.addingTimeInterval(-86400))
+        XCTAssertFalse(indexed.usageIsComplete, "the local file cache must preserve the reader's incomplete-usage flag")
+    }
+
+    func testAStoredStopSurvivesRereadingALockedSessionAndDoesNotFinishLaterWork() async throws {
+        let root = try directory(), url = root.appendingPathComponent("sessions.db"), now = now
+        try database(url, sessions: [
+            "'s1', '/w', 'windsurf', 'm', 'normal', \(sec(-7200)), \(sec(-600)), 'Session', 0"
+        ], nodes: [])
+        try String(ProcessInfo.processInfo.processIdentifier).write(to: root.appendingPathComponent("session_locks/s1.lock"),
+                                                                   atomically: true, encoding: .utf8)
+        let stop = try XCTUnwrap(CompletionHooks.completion(source: .devin,
+            payload: .object(["hook_event_name": .string("Stop"), "session_id": .string("s1"), "prompt_id": .string("finished-prompt")]),
+            now: now.addingTimeInterval(-600)))
+        XCTAssertEqual(stop.sessionID, "devin:s1")
+        func report(at readAt: Date) async throws -> UsageReport {
+            let local = try DevinSessions.read(url, since: now.addingTimeInterval(-86400), now: readAt)
+            return try await AdditionalUsageProvider(source: .devin, readQuota: { ProviderQuota() }, readSessions: { _ in local },
+                history: QuotaHistoryStore(), readCompletions: { _ in [stop] }, clock: { readAt })
+                .fetchUsage(agents: [], historyHours: 24)
+        }
+        for readAt in [now, now.addingTimeInterval(60)] {
+            let finished = try await report(at: readAt)
+            XCTAssertEqual(finished.turns.first?.state, .completed, "rereading a live lock must not supersede the stored Stop")
+            XCTAssertNotNil(finished.sessions.first?.endedAt)
+        }
+        try execute("UPDATE sessions SET last_activity_at = \(sec(0)) WHERE id = 's1'", at: url)
+        let resumed = try await report(at: now)
+        XCTAssertEqual(resumed.turns.first?.state, .running, "a Stop for earlier activity must not finish newly recorded work")
+        XCTAssertNil(resumed.sessions.first?.endedAt)
+    }
+
+    func testTruncatedReadsKeepRecordedUsageAndAddNewRequestsOnce() async throws {
+        let root = try directory(), url = root.appendingPathComponent("sessions.db"), now = now
+        try database(url, sessions: [
+            "'busy', '/w', 'windsurf', 'm', 'normal', \(sec(-3600)), \(sec(-60)), 'Busy', 0"
+        ], nodes: ["'busy', 1, '\(message(id: "m1", request: "r1", at: -120))', \(sec(-120))"])
+        let provider = AdditionalUsageProvider(source: .devin, readQuota: { ProviderQuota() }, readSessions: { since in
+            do { return try DevinSessions.read(url, since: since, now: now) }
+            catch { XCTFail("Could not read fixture: \(error)"); return ProviderSessions() }
+        }, history: QuotaHistoryStore(), clock: { now })
+        _ = try await provider.fetchUsage(agents: [], historyHours: 24)
+        let before = await provider.usage(since: now.addingTimeInterval(-86400))
+        XCTAssertEqual(before.reduce(0) { $0 + $1.tokensIn }, 100)
+        let tools = (2...1001).map {
+            "INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) VALUES ('busy', \($0), '{\"role\":\"tool\"}', \(sec(-30)));"
+        }.joined()
+        try execute(tools + "INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) VALUES ('busy', 1002, '\(message(id: "m2", request: "r2", at: -10, input: 25, output: 10))', \(sec(-10)));", at: url)
+        let truncated = try DevinSessions.read(url, since: now.addingTimeInterval(-86400), now: now)
+        XCTAssertFalse(truncated.usageIsComplete)
+        XCTAssertEqual(truncated.sessions.first?.events.map(\.id), ["r2"], "the first request is beyond the node cap")
+        for _ in 0..<2 {
+            _ = try await provider.fetchUsage(agents: [], historyHours: 24)
+            let after = await provider.usage(since: now.addingTimeInterval(-86400))
+            XCTAssertEqual(after.reduce(0) { $0 + $1.tokensIn }, 125, "a truncated snapshot retains the old request and counts the new one once")
+            XCTAssertEqual(after.reduce(0) { $0 + $1.tokensOut }, 60)
+        }
     }
 }
