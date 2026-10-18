@@ -90,6 +90,46 @@ public enum QuotaMath {
         return (Double(tokens) / hours).rounded()
     }
 
+    /// The tokens the window's consumers spent over the observed part of its current cycle; usage from before `usage`
+    /// begins is not guessed at. Nil where the cycle is unknown or there are no consumers.
+    public static func tokensTotal(snapshot: UsageSnapshot, consumers: Set<String>, usage: [UsageBucket], now: Date) -> Int? {
+        guard !consumers.isEmpty, let cycle = snapshot.cycle, let oldest = usage.first?.start else { return nil }
+        let start = max(cycle.start, oldest)
+        let tokens = usage.reduce(0) { total, bucket in
+            consumers.contains(bucket.agentId) && bucket.start >= start && bucket.start < now
+                ? total + bucket.total + bucket.cacheReadTokens : total
+        }
+        return tokens
+    }
+
+    /// How far apart two calls can sit before the stretch between them reads as idle rather than generation: past it
+    /// the span belongs to the person or a tool run the log cannot time, not to the model replying.
+    public static let replyGapCap: TimeInterval = 120
+
+    /// Output tokens per second of active replying, from call events timestamped when they complete: each call's span
+    /// is the gap since the previous call in its own log, capped at `replyGapCap`; longer gaps are idle and drop both
+    /// the span and the call that followed them. Calls are grouped by contribution so two sessions' timelines never
+    /// borrow each other's gaps. Nil when no call pair qualifies.
+    public static func replyRate(events: [UsageLedger.ReplyEvent], consumers: Set<String>) -> QuotaReplyRate? {
+        var byLog: [Int64: [(atMs: Int64, out: Int)]] = [:]
+        for event in events where consumers.contains(event.agent) {
+            byLog[event.contribution, default: []].append((event.atMs, event.out))
+        }
+        var out = 0, span = 0.0, calls = 0
+        for events in byLog.values {
+            let sorted = events.sorted { $0.atMs < $1.atMs }
+            for (before, after) in zip(sorted, sorted.dropFirst()) {
+                let gap = Double(after.atMs - before.atMs) / 1000
+                guard gap > 0, gap <= replyGapCap else { continue }
+                out += after.out
+                span += gap
+                calls += 1
+            }
+        }
+        guard span > 0 else { return nil }
+        return QuotaReplyRate(tokensPerSecond: Double(out) / span, calls: calls, tokensOut: out)
+    }
+
     /// What the tokens the window's consumers spent over the observed part of its current cycle would cost at list
     /// price, currency by currency. An estimate: a subscription is not billed by the token, and a model without a list
     /// price is left out. Nil when the cycle is unknown or nothing priced was spent in it.
@@ -105,6 +145,34 @@ public enum QuotaMath {
             amounts[cost.currency, default: 0] += cost.total
         }
         return amounts.isEmpty ? nil : QuotaListCost(amounts: amounts, hours: hours)
+    }
+}
+
+/// A quota window's consumed amount over the observed part of its current cycle, in the window's own unit (tokens,
+/// credits, minutes), with the cycle's size where the source reports one.
+public struct QuotaConsumption: Hashable, Sendable {
+    public let used: Int64
+    public let capacity: Int64?
+
+    public init(used: Int64, capacity: Int64? = nil) {
+        self.used = used
+        self.capacity = capacity
+    }
+}
+
+/// How fast a window's models reply: their output tokens per second of active turn, so the idle stretches between
+/// prompts weigh nothing. A turn's span ends at its last call, so tool time inside a turn counts as active.
+public struct QuotaReplyRate: Hashable, Codable, Sendable {
+    public let tokensPerSecond: Double
+    /// How many calls the rate averages over.
+    public let calls: Int
+    /// The output tokens those calls produced.
+    public let tokensOut: Int
+
+    public init(tokensPerSecond: Double, calls: Int, tokensOut: Int) {
+        self.tokensPerSecond = tokensPerSecond
+        self.calls = calls
+        self.tokensOut = tokensOut
     }
 }
 

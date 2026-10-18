@@ -17,12 +17,13 @@ public extension PanelBlockKind {
     /// The measures the kind offers under a widget, in picker order; none under a widget it does not accept. A chart of
     /// quota windows draws the history the panel holds, tokens. A balance is money: its number offers the balance beside
     /// its estimated cost (`quota`), the pace its recorded costs set and when the balance runs out at it (`burn`), and
-    /// the estimated cost beside that pace (`cost`); its chart draws the estimated cost over time.
+    /// the estimated cost beside that pace (`cost`); it also reads the tokens of its own consumers like a quota window
+    /// (`tokens`, `consumed`); its chart draws the estimated cost over time.
     func measures(under widget: PanelWidget) -> [PanelMeasure] {
         switch (self, widget) {
-        case (.quota, .bar), (.quota, .ring), (.quota, .number): [.quota, .burnRate, .tokens, .cost]
+        case (.quota, .bar), (.quota, .ring), (.quota, .number): [.quota, .burnRate, .tokens, .consumed, .cost]
         case (.quota, .chart): [.tokens]
-        case (.billing, .number): [.quota, .burnRate, .cost]
+        case (.billing, .number): [.quota, .burnRate, .tokens, .consumed, .cost]
         case (.billing, .chart): [.cost]
         case (.billing, _): []
         }
@@ -296,8 +297,8 @@ extension PanelLayout {
         switch (kind, widget) {
         case (.billing, .chart):
             " The \"chart\" widget of an API balance draws its estimated cost over its period."
-        case (.billing, _) where measure == .tokens:
-            " An API balance is measured in money; the tokens of its models are in the token chart."
+        case (.billing, _) where measure == .tokens || measure == .consumed:
+            " An API balance draws its models' tokens under the \"number\" widget."
         default:
             ""
         }

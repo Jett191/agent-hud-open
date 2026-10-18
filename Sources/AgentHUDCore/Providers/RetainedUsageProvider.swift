@@ -163,6 +163,7 @@ extension UsageReport {
             activeQuotaPoolIDs: (previous.activeQuotaPoolIDs ?? [:]).merging(activeQuotaPoolIDs ?? [:], uniquingKeysWith: { _, new in new }),
             accounts: accounts,
             sessionUsage: Self.retainedSessionUsage(sessionUsage, previous: previous.sessionUsage, sessions: retainedSessions),
+            replyRates: replyRates ?? previous.replyRates,
             sessionCredits: Self.retainedSessionCredits(sessionCredits, previous: previous.sessionCredits),
             // Like `usage`, the periods come from the ledger, which keeps what a failed refresh recorded before.
             periods: periods, recached: recached,

@@ -51,6 +51,9 @@ public enum UsageProbe {
         }
         let clients = Dictionary(grouping: report.sessions, by: { $0.client ?? "unknown" }).mapValues(\.count)
         print("Session clients: \(clients.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", "))")
+        for (window, consumers) in report.consumerIdsByQuota.sorted(by: { $0.key < $1.key }) {
+            print("  quota \(window): consumers=\(consumers.sorted()) replyRate=\(report.replyRates?[window].map { "\($0.tokensPerSecond)/s over \($0.calls) calls" } ?? "nil")")
+        }
         let deepseek = report.sessions.filter { $0.client == "DeepSeek Harness" }
         let deepseekTokens = report.usage.filter { $0.agentId.hasPrefix("deepseek-model:") }.reduce(0) { $0 + $1.total }
         print("DeepSeek: \(deepseek.count) sessions (\(deepseek.filter(\.isLive).count) live), \(deepseekTokens) tokens in range")

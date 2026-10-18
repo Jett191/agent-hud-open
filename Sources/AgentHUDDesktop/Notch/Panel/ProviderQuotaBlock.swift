@@ -23,7 +23,8 @@ extension PanelMeasure {
         switch self {
         case .quota: L10n.text("额度", "Quota")
         case .burnRate: L10n.text("消耗速率", "Burn rate")
-        case .tokens: L10n.text("Token 速率", "Tokens / h")
+        case .tokens: L10n.text("回复速率", "Reply rate")
+        case .consumed: L10n.text("已消耗", "Consumed")
         case .cost: L10n.text("费用估算", "Est. cost")
         }
     }
@@ -32,7 +33,8 @@ extension PanelMeasure {
         switch self {
         case .quota: "percent"
         case .burnRate: "flame.fill"
-        case .tokens: "number"
+        case .tokens: "speedometer"
+        case .consumed: "sum"
         case .cost: "dollarsign"
         }
     }
@@ -252,8 +254,9 @@ struct ProviderQuotaBlock: View {
                 ModelUsageRow(row: row, now: store.now, metric: metric, showReset: showReset, showVendor: false,
                               insights: store.report?.insightsByAgent[row.id],
                               outlook: store.view.outlook(for: row.id),
-                              tokensPerHour: store.quotaTokensPerHour(for: row.id),
+                              tokensPerHour: store.quotaTokensPerHour(for: row.id), replyRate: replyRate(row),
                               forecastHint: store.quotaForecastHint(for: row.id),
+                              consumed: consumed(row),
                               cost: cost(row), isLoading: store.isLoading)
             }
         }
@@ -261,12 +264,23 @@ struct ProviderQuotaBlock: View {
 
     private func metrics(_ row: AgentRow) -> QuotaRowMetrics {
         QuotaRowMetrics(row: row, insights: store.report?.insightsByAgent[row.id], outlook: store.view.outlook(for: row.id),
-                        now: store.now, tokensPerHour: store.quotaTokensPerHour(for: row.id), cost: cost(row))
+                        now: store.now, tokensPerHour: store.quotaTokensPerHour(for: row.id), replyRate: replyRate(row),
+                        consumed: consumed(row), cost: cost(row))
     }
 
     /// The cycle's list cost is priced from every bucket of the window, so only the measure that shows it asks for it.
     private func cost(_ row: AgentRow) -> QuotaListCost? {
         metric == .cost ? store.view.listCost(for: row.id) : nil
+    }
+
+    /// The cycle's consumed amount reads the window's own tally or its consumers' buckets, fetched when it shows.
+    private func consumed(_ row: AgentRow) -> QuotaConsumption? {
+        metric == .consumed ? store.view.consumed(for: row.id) : nil
+    }
+
+    /// The models' reply speed reads the sessions' call records, so it is fetched only when its measure shows.
+    private func replyRate(_ row: AgentRow) -> QuotaReplyRate? {
+        metric == .tokens ? store.quotaReplyRate(for: row.id) : nil
     }
 }
 
