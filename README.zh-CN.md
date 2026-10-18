@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>你的 Agent，抬眼可见。</strong><br>
-  Claude Code、Codex 以及另外 15 款 agent 的用量、Token 与会话，就在 Mac 灵动岛或任意屏幕边缘。
+  Claude Code、Codex 以及另外 16 款 agent 的用量、Token 与会话，就在 Mac 灵动岛或任意屏幕边缘。
 </p>
 
 <p align="center">
@@ -125,7 +125,7 @@ iPhone 与 Apple Watch 版 Agent HUD 显示 Mac 采集到的数据：额度、�
 
 ## 支持的 agent
 
-安装并登录想要监测的 agent，Agent HUD 会自动发现它们。17 款都提供 Token 与会话。
+安装并登录想要监测的 agent，Agent HUD 会自动发现它们。18 款都提供 Token 与会话。
 
 | Agent | 额度 | 实时状态 | 批准 | 提问 | 回复 | 回到会话 | 轮次与调用 |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -146,6 +146,9 @@ iPhone 与 Apple Watch 版 Agent HUD 显示 Mac 采集到的数据：额度、�
 | **CodeBuddy** |  |  | ✓ |  | ✓ |  |  |
 | **WorkBuddy** |  |  | ✓ |  |  |  |  |
 | **Qwen&nbsp;Code** |  |  | ✓ |  | ✓ |  |  |
+| **Devin&nbsp;CLI** | ✓（缓存） | ✓ | ✓ |  | ✓ |  |  |
+
+Devin 的每日与每周额度来自 CLI 的本机缓存；需在 CLI 中刷新，才能更新读数。
 
 另外还读取 **GLM Coding Plan** 的额度，并支持批准 **Qoder** 系列的请求。Codex 的批准需先在 Codex 中信任回调，Copilot 的额度需先在设置中同意读取。其余见[各 agent 的详情](docs/providers.md)。
 
