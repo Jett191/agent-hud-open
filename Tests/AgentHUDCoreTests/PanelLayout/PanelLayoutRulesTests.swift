@@ -35,10 +35,11 @@ final class PanelLayoutRulesTests: XCTestCase {
 
     func testTheMeasuresOfferedFollowTheKindAndTheWidget() {
         for widget in [PanelWidget.bar, .ring, .number] {
-            XCTAssertEqual(PanelBlockKind.quota.measures(under: widget), [.quota, .burnRate, .tokens, .cost], "\(widget)")
+            XCTAssertEqual(PanelBlockKind.quota.measures(under: widget), [.quota, .burnRate, .tokens, .consumed, .cost], "\(widget)")
         }
         XCTAssertEqual(PanelBlockKind.quota.measures(under: .chart), [.tokens])
-        XCTAssertEqual(PanelBlockKind.billing.measures(under: .number), [.quota, .burnRate, .cost], "money, and no tokens")
+        XCTAssertEqual(PanelBlockKind.billing.measures(under: .number), [.quota, .burnRate, .tokens, .consumed, .cost],
+                       "a balance also reads its models' reply speed and recorded tokens")
         XCTAssertEqual(PanelBlockKind.billing.measures(under: .chart), [.cost], "a balance's chart draws its estimated cost")
         for widget in [PanelWidget.bar, .ring] {
             XCTAssertEqual(PanelBlockKind.billing.measures(under: widget), [], "\(widget) is not a balance's widget")
@@ -46,14 +47,15 @@ final class PanelLayoutRulesTests: XCTestCase {
     }
 
     func testAListOfMeasuresIsKeptToWhatTheWidgetOffersAndNoneLeftIsEveryOne() {
-        let every: [PanelMeasure] = [.quota, .burnRate, .tokens, .cost]
+        let every: [PanelMeasure] = [.quota, .burnRate, .tokens, .consumed, .cost]
         XCTAssertEqual(PanelBlockKind.quota.measures([], under: .bar), every)
         XCTAssertEqual(PanelBlockKind.quota.measures([.cost, .quota], under: .ring), [.cost, .quota])
         XCTAssertEqual(PanelBlockKind.quota.measures([.cost, .cost, .burnRate], under: .number), [.cost, .burnRate])
         XCTAssertEqual(PanelBlockKind.quota.measures([.quota, .tokens], under: .chart), [.tokens])
         XCTAssertEqual(PanelBlockKind.quota.measures([.quota], under: .chart), [.tokens])
         XCTAssertEqual(PanelBlockKind.billing.measures([.cost], under: .number), [.cost])
-        XCTAssertEqual(PanelBlockKind.billing.measures([.tokens, .burnRate], under: .number), [.burnRate])
+        XCTAssertEqual(PanelBlockKind.billing.measures([.tokens, .consumed, .burnRate, .tokens], under: .number),
+                       [.tokens, .consumed, .burnRate])
         XCTAssertEqual(PanelBlockKind.billing.measures([.quota, .burnRate], under: .chart), [.cost])
         for kind in [PanelBlockKind.quota, .billing] {
             for widget in kind.widgets {
@@ -200,15 +202,8 @@ final class PanelLayoutRulesTests: XCTestCase {
         ])
         XCTAssertEqual(issues("Claude", PanelLayout.Block(widget: .chart, measures: [.tokens])), [])
         XCTAssertEqual(issues("Claude", PanelLayout.Block(measures: [.cost])), [], "without a widget the default one decides")
-        XCTAssertEqual(issues("api:DeepSeek", PanelLayout.Block(measures: [.cost, .burnRate, .quota])), [], "a balance's number offers all three")
-        let money = [
-            #"The "number" widget of "api:DeepSeek" does not offer the measure "tokens"."#,
-            #" An API balance is measured in money; the tokens of its models are in the token chart."#,
-            #" It offers: "quota", "burn", "cost"."#,
-        ].joined()
-        XCTAssertEqual(issues("api:DeepSeek", PanelLayout.Block(measures: [.quota, .tokens])), [
-            PanelLayoutIssue(path: "blocks.api:DeepSeek.measures[1]", message: money),
-        ])
+        XCTAssertEqual(issues("api:DeepSeek", PanelLayout.Block(measures: [.cost, .burnRate, .quota, .tokens, .consumed])), [],
+                       "a balance's number offers money, reply speed and consumption")
         let charted = [
             #"The "chart" widget of "api:DeepSeek" does not offer the measure "burn"."#,
             #" The "chart" widget of an API balance draws its estimated cost over its period. It offers: "cost"."#,
@@ -218,7 +213,7 @@ final class PanelLayoutRulesTests: XCTestCase {
         ])
         // A widget the block cannot take is drawn as its default, and the measures are weighed under that one.
         XCTAssertEqual(issues("api:DeepSeek", PanelLayout.Block(widget: .ring, measures: [.tokens])).map(\.path),
-                       ["blocks.api:DeepSeek.widget", "blocks.api:DeepSeek.measures[0]"])
+                       ["blocks.api:DeepSeek.widget"])
         XCTAssertEqual(issues("api:DeepSeek", PanelLayout.Block(widget: .ring, measures: [.burnRate])).map(\.path), ["blocks.api:DeepSeek.widget"])
     }
 
@@ -282,7 +277,7 @@ final class PanelLayoutRulesTests: XCTestCase {
         ], order: ["Zed"])
         XCTAssertEqual(layout.issues(against: blocks).map(\.path), [
             "blocks.Claude.measures[0]", "blocks.Claude.ringSize", "blocks.Claude.hiddenRows[0]", "blocks.Zed",
-            "blocks.api:DeepSeek.widget", "blocks.api:DeepSeek.measures[0]", "blocks.api:DeepSeek.countdown",
+            "blocks.api:DeepSeek.widget", "blocks.api:DeepSeek.countdown",
             "blocks.api:DeepSeek.columns", "blocks.api:DeepSeek.ringSize", "blocks.api:DeepSeek.hiddenRows[0]", "order[0]",
         ])
         // A layout with issues still resolves: what cannot be done as asked falls back or waits.
@@ -336,9 +331,9 @@ final class PanelLayoutRulesTests: XCTestCase {
     /// the default.
     func testALayoutThatSpellsOutTheDefaultViewIsTheDefaultLayout() {
         let spelled = PanelLayout(blocks: [
-            "Claude": PanelLayout.Block(widget: .bar, measures: [.quota, .burnRate, .tokens, .cost]),
+            "Claude": PanelLayout.Block(widget: .bar, measures: [.quota, .burnRate, .tokens, .consumed, .cost]),
             "Codex": PanelLayout.Block(widget: .bar),
-            "api:DeepSeek": PanelLayout.Block(widget: .number, measures: [.quota, .burnRate, .cost]),
+            "api:DeepSeek": PanelLayout.Block(widget: .number, measures: [.quota, .burnRate, .tokens, .consumed, .cost]),
         ], order: ["Claude", "Codex", "api:DeepSeek"], sections: [.blocks, .tokens, .sessions],
            style: PanelStyle(spacing: .regular, separators: true))
         XCTAssertFalse(spelled.isDefault)
@@ -364,21 +359,30 @@ final class PanelLayoutRulesTests: XCTestCase {
                        PanelLayout(order: ["Codex", "api:DeepSeek"]))
     }
 
+    func testAnExplicitEarlierMeasureListKeepsItsSelectionAfterNewMeasuresAreAdded() {
+        let layout = PanelLayout(blocks: [
+            "Claude": PanelLayout.Block(measures: [.quota, .burnRate, .tokens, .cost]),
+            "api:DeepSeek": PanelLayout.Block(measures: [.quota, .burnRate, .cost]),
+        ])
+        XCTAssertEqual(layout.reduced(against: blocks), layout,
+                       "an explicit list does not acquire consumption or a balance's reply speed")
+    }
+
     /// A list of measures that is everything its widget offers in the widget's order, columns of four and a medium ring
     /// are the default view's; what a block has nothing to set for draws nothing.
     func testWhatABlockWouldDrawAnywayIsLeftOut() {
         let layout = PanelLayout(blocks: [
-            "Claude": PanelLayout.Block(widget: .ring, measures: [.quota, .burnRate, .tokens, .cost, .quota], columns: 4, ringSize: .medium),
+            "Claude": PanelLayout.Block(widget: .ring, measures: [.quota, .burnRate, .tokens, .consumed, .cost, .quota], columns: 4, ringSize: .medium),
             "Codex": PanelLayout.Block(widget: .bar, measures: [.burnRate, .quota], columns: 3, ringSize: .large),
-            "api:DeepSeek": PanelLayout.Block(widget: .number, measures: [.quota, .tokens, .burnRate, .cost], countdown: false,
+            "api:DeepSeek": PanelLayout.Block(widget: .number, measures: [.quota, .burnRate, .tokens, .consumed, .cost], countdown: false,
                                               columns: 3),
         ])
         XCTAssertEqual(layout.reduced(against: blocks), PanelLayout(blocks: [
             "Claude": PanelLayout.Block(widget: .ring),
             "Codex": PanelLayout.Block(measures: [.burnRate, .quota]),
-        ]), "a balance offers no tokens, has no countdown and no cells")
+        ]), "a balance has no countdown and no cells; its default measures need no override")
         XCTAssertEqual(PanelLayout(blocks: ["api:DeepSeek": PanelLayout.Block(measures: [.cost, .quota])]).reduced(against: blocks),
-                       PanelLayout(blocks: ["api:DeepSeek": PanelLayout.Block(measures: [.cost, .quota])]), "two of a balance's three draw")
+                       PanelLayout(blocks: ["api:DeepSeek": PanelLayout.Block(measures: [.cost, .quota])]), "two of a balance's measures draw")
         let kept = PanelLayout(blocks: ["Claude": PanelLayout.Block(widget: .number, measures: [.cost, .quota, .burnRate, .tokens],
                                                                     countdown: false, columns: 6),
                                         "Codex": PanelLayout.Block(widget: .ring, measures: [.quota], ringSize: .small)])

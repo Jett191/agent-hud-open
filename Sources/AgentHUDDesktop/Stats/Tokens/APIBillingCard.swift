@@ -43,6 +43,8 @@ struct APIBillingCard: View {
                 Text(billing.displayName)
                     .font(compact ? IslandRowLayout.headingFont : .ui(12, .semibold))
                     .foregroundStyle(theme.text)
+                    .fixedSize(horizontal: half, vertical: false)
+                    .layoutPriority(1)
                 Spacer()
                 if let picker {
                     // The picker stands over the heading's padding rather than making its line taller, so the card is as

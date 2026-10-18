@@ -60,6 +60,7 @@ struct IslandQuotaMetricPicker: View {
     /// The tokens of what it heads: its block's in the panel, or the sample's in Settings.
     let theme: Theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.panelHalf) private var half
 
     var body: some View {
         HStack(spacing: 2) {
@@ -69,7 +70,9 @@ struct IslandQuotaMetricPicker: View {
                 } label: {
                     Image(systemName: metric.symbol(for: kind))
                         .font(.ui(9, .semibold))
-                        .frame(width: 20, height: IslandRowLayout.headingHeight)
+                        // Half blocks keep the name's room; each nine-point symbol still fits when its button narrows.
+                        .frame(minWidth: half ? 14 : 20, idealWidth: 20, maxWidth: 20,
+                               minHeight: IslandRowLayout.headingHeight, maxHeight: IslandRowLayout.headingHeight)
                         .foregroundStyle(selection == metric ? theme.text : theme.tertiary)
                         .background(
                             RoundedRectangle(cornerRadius: 5)
@@ -83,6 +86,7 @@ struct IslandQuotaMetricPicker: View {
                 .accessibilityAddTraits(selection == metric ? .isSelected : [])
             }
         }
+        .frame(maxWidth: half ? CGFloat(PanelLines.metricPickerWidth) : nil)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(L10n.text("额度指标", "Quota metric"))
     }

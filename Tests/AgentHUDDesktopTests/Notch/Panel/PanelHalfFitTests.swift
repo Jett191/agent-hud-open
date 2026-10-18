@@ -153,12 +153,15 @@ final class PanelHalfFitTests: XCTestCase {
 
     // MARK: Headings, accounts, resets and balances
 
-    /// A block's heading keeps its logo, its name whole on one line and its picker of four measures, or a chart's total,
+    /// A block's heading keeps its logo, its name whole on one line and its picker of five measures, or a chart's total,
     /// in half a line, for every agent the app reads quota for, the longest name, GitHub Copilot's, at the narrowest
     /// half too: `PanelLines.widestHeading` is what that heading takes, and the narrowest half has its room.
     func testAHalfBlocksHeadingKeepsItsLogoNameAndPicker() {
         let logo = IslandRowLayout.inset * 2 + IslandRowLayout.markerWidth, gap: CGFloat = 6
-        let picker = CGFloat(4 * 20 + 3 * 2) + 2
+        let picker = CGFloat(PanelLines.metricPickerWidth) + 2
+        let measured = NSHostingView(rootView: IslandQuotaMetricPicker(selection: .constant(.quota), theme: .island)
+            .environment(\.panelHalf, true).fixedSize()).fittingSize.width
+        XCTAssertEqual(measured, CGFloat(PanelLines.metricPickerWidth), accuracy: 0.5)
         let widest = Self.agentNames.map { textWidth($0, IslandRowLayout.headingFont, "heading") }.max() ?? 0
         XCTAssertEqual(Double(logo + gap + widest + gap + 8 + gap + picker), PanelLines.widestHeading, accuracy: 0.5,
                        "GitHub Copilot's heading")
@@ -194,6 +197,27 @@ final class PanelHalfFitTests: XCTestCase {
                                            "\(language) \(name) \(widget), \(measures.count) measures, loading \(shown.isLoading)")
                         }
                     }
+                }
+            }
+        }
+    }
+
+    func testHalfMetricPickersKeepEverySymbolWithinTheHeadingBudget() {
+        for kind in [PanelBlockKind.quota, .billing] {
+            let offered = kind.measures(under: .number)
+            for count in 1...offered.count {
+                let measures = Array(offered.prefix(count))
+                let expected = min(CGFloat(count * 20 + (count - 1) * 2), CGFloat(PanelLines.metricPickerWidth))
+                let picker = NSHostingView(rootView: IslandQuotaMetricPicker(selection: .constant(measures[0]), measures: measures,
+                    kind: kind, theme: .island).environment(\.panelHalf, true).fixedSize()).fittingSize
+                XCTAssertEqual(picker.width, expected, accuracy: 0.5, "\(kind), \(count) measures")
+                XCTAssertEqual(picker.height, IslandRowLayout.headingHeight, accuracy: 0.5)
+                let button = (expected - CGFloat((count - 1) * 2)) / CGFloat(count)
+                for measure in measures {
+                    let symbol = NSHostingView(rootView: Image(systemName: measure.symbol(for: kind))
+                        .font(.ui(9, .semibold)).fixedSize()).fittingSize.width
+                    XCTAssertLessThanOrEqual(symbol, button, "\(measure)'s symbol stays whole")
+                    XCTAssertLessThanOrEqual(symbol, 14, "the symbol also fits beside a longer balance name")
                 }
             }
         }
