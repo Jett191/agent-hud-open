@@ -91,6 +91,18 @@ final class IslandHoverAnchorView<Content: View>: NSView {
                 popup.panel.invalidateShadow()
             }
         }
+        // A tracking area fires only when the pointer crosses the rect in the window's coordinates: when the panel's
+        // window moves or the row shifts under a still pointer the exit never comes and the popup would stay pinned.
+        // Reconcile with where the cursor actually is so a missed exit clears on this pass instead.
+        var isHovered = isHovered
+        if isHovered, let window {
+            let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            if !bounds.insetBy(dx: -1, dy: -1).contains(point) {
+                pointerLocation = nil
+                onHover(false)
+                isHovered = false
+            }
+        }
         guard isHovered, enabled, let window, let pointerLocation else {
             dismiss()
             return
