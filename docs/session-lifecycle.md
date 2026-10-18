@@ -22,6 +22,7 @@ Which clients expose running and terminal turns, which of them say they are wait
 | Cursor | No | Through the `stop` hook | Local records supply usage only. |
 | CodeBuddy | No | Through the `Stop` hook | Local records supply usage only. |
 | Qwen Code | No | Through the `Stop` hook | Transcripts record no turn end; a text-only answer is not one, because a hook or a follow-up can continue the turn. |
+| Devin CLI | Yes | Through the `Stop` hook | Recent `sessions.last_activity_at`, or a live session-lock PID, makes a running observation whose time remains the client's last activity. A Stop at or after that activity completes it; a later database activity can run again. A live lock alone never renews the observation, and the common 30-minute silence limit applies. |
 | Hermes Agent, ZCode, WorkBuddy | No | No | Local records hold usage counters only. |
 | OpenCode | No | Through the plugin | The Agent HUD plugin records a turn when its session goes idle after a final answer; a persisted message end alone is not an agent end. |
 | GLM | n/a | n/a | Billing service; execution state belongs to the client using it. |
@@ -110,7 +111,7 @@ Claude Code writes a compaction's boundary to the log only once the summary is i
 
 ### Completion hooks
 
-Antigravity, Cursor, GitHub Copilot CLI, CodeBuddy and Qwen Code do not record finished turns locally, so their completions come from the clients' own stop hooks. `CompletionHooks` owns the configuration, the callback and the local record.
+Antigravity, Cursor, GitHub Copilot CLI, CodeBuddy, Qwen Code and Devin CLI supply their completion observations through the clients' own stop hooks. `CompletionHooks` owns the configuration, the callback and the local record.
 
 | Source | Configuration | Accepted as a completion when |
 | --- | --- | --- |
@@ -119,8 +120,9 @@ Antigravity, Cursor, GitHub Copilot CLI, CodeBuddy and Qwen Code do not record f
 | GitHub Copilot CLI | `bash` handler in `hooks.agentStop` of the version-1 user hook file `~/.copilot/hooks/agent-hud.json`, `timeoutSec` 5 | `stopReason` is `end_turn` and `sessionId` is present; the turn is the callback time |
 | CodeBuddy | Group appended to `hooks.Stop` of `~/.codebuddy/settings.json`; only commands ending in ` --completion-hook codebuddy` are Agent HUD's | `hook_event_name` is `Stop` and `session_id` is present; the turn is the transcript's last completed assistant `messageId` after the last user message, else the callback time |
 | Qwen Code | Group appended to `hooks.Stop` of `settings.json` in `$QWEN_HOME` (default `~/.qwen`), timeout 5000 ms; only commands ending in ` --completion-hook qwen` are Agent HUD's | `hook_event_name` is `Stop` and `session_id` is present; the turn is `prompt_id` (0.23.4 and later), else the callback time. A cancelled or failed turn runs no `Stop` |
+| Devin CLI | Group appended to `hooks.Stop` of `~/.config/devin/config.json`, timeout 10 s; only commands ending in ` --completion-hook devin` are Agent HUD's | `hook_event_name` is `Stop` and `session_id` is present; `prompt_id` identifies the turn, else the callback time does. Session ids are prefixed with `devin:` to match the database reader |
 
-- The handler command is `'<executable path>' --completion-hook <source>` with a 5-second timeout, written in the client's own unit. Other hooks in the file are preserved. The first Agent HUD handler already in the file keeps its place and whatever a user changed in it — its group's matcher, its timeout, Antigravity's `enabled` — and only its command is set; any other Agent HUD handler goes, and a file that needs no new command is not rewritten. A settings file kept as a symbolic link, as a dotfiles checkout keeps it, is written where the link leads and stays a link, and every rewritten file keeps its permissions; approval hooks are written the same way.
+- The handler command is `'<executable path>' --completion-hook <source>` with a 5-second timeout unless the table specifies another value, written in the client's own unit. Other hooks in the file are preserved. The first Agent HUD handler already in the file keeps its place and whatever a user changed in it — its group's matcher, its timeout, Antigravity's `enabled` — and only its command is set; any other Agent HUD handler goes, and a file that needs no new command is not rewritten. A settings file kept as a symbolic link, as a dotfiles checkout keeps it, is written where the link leads and stays a link, and every rewritten file keeps its permissions; approval hooks are written the same way.
 - Only one copy of the application runs at a time ([command line](command-line.md#launch-and-display)), and at each start it points every Agent HUD handler at itself, whichever copy wrote it: another build, one since moved or deleted, or one that ran from a disk image. Moving the application, or starting another build, therefore moves the hooks at the next start.
 - An application running from under App Translocation or `/Volumes` installs no hook and logs why. Installing a hook never starts, restarts or interrupts the client and consumes no quota.
 - A settings file over 16 MB, or one that is not a JSON object, is left as it is and the hook is not installed; an empty one counts as empty settings. Approval and notification hooks follow the same rule.

@@ -39,6 +39,7 @@ extension AdditionalSource {
         case .codebuddy: CodeBuddySessions.self
         case .workbuddy: WorkBuddySessions.self
         case .qwen: QwenSessions.self
+        case .devin: DevinSessions.self
         }
     }
 }

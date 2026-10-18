@@ -24,6 +24,7 @@ public enum PermissionHooks {
         case qwen
         case antigravity
         case deepseek
+        case devin
 
         public var vendor: String {
             switch self {
@@ -38,6 +39,7 @@ public enum PermissionHooks {
             case .qwen: return "Qwen"
             case .antigravity: return "Antigravity"
             case .deepseek: return "DeepSeek"
+            case .devin: return "Devin"
             }
         }
 
@@ -55,7 +57,7 @@ public enum PermissionHooks {
         /// Claude Code and Codex keep the client's own, and the Qoder builds report no sessions.
         func sessionID(_ raw: String) -> String {
             switch self {
-            case .codebuddy, .workbuddy, .zcode, .qwen, .antigravity, .deepseek: return "\(rawValue):\(raw)"
+            case .codebuddy, .workbuddy, .zcode, .qwen, .antigravity, .deepseek, .devin: return "\(rawValue):\(raw)"
             case .claude, .codex, .qoder, .qoderCN, .qoderWork: return raw
             }
         }
@@ -65,7 +67,7 @@ public enum PermissionHooks {
         var supportsPermissionUpdates: Bool {
             switch self {
             case .claude, .qoder, .qoderCN, .qoderWork: return true
-            case .codex, .codebuddy, .workbuddy, .zcode, .qwen, .antigravity, .deepseek: return false
+            case .codex, .codebuddy, .workbuddy, .zcode, .qwen, .antigravity, .deepseek, .devin: return false
             }
         }
         /// Matched against the tool name; empty is every tool. ZCode rejects an empty matcher and runs a group without
@@ -85,7 +87,7 @@ public enum PermissionHooks {
         var unanswerableTools: Set<String> {
             switch self {
             case .zcode: return ["ExitPlanMode"]
-            case .qwen: return ["ask_user_question", "exit_plan_mode"]
+            case .qwen, .devin: return ["ask_user_question", "exit_plan_mode"]
             case .qoder, .qoderCN, .qoderWork, .codebuddy, .workbuddy: return ["AskUserQuestion", "ExitPlanMode"]
             case .claude, .codex, .antigravity, .deepseek: return []
             }
@@ -112,6 +114,7 @@ public enum PermissionHooks {
             case .qwen: return ".qwen"
             case .antigravity: return ".gemini"
             case .deepseek: return ".dsh"
+            case .devin: return ".config/devin"
             }
         }
 
@@ -132,7 +135,7 @@ public enum PermissionHooks {
             let name: String
             switch self {
             case .codex: name = "hooks.json"
-            case .zcode: name = "config.json"
+            case .zcode, .devin: name = "config.json"
             case .antigravity: name = "config/hooks.json"
             case .deepseek: name = "settings.yaml"
             default: name = "settings.json"
@@ -150,6 +153,9 @@ public enum PermissionHooks {
                     || fileManager.fileExists(atPath: self.home(home).appendingPathComponent("projects").path)
             case .codex, .qoder, .qoderCN, .qoderWork, .zcode, .qwen:
                 return fileManager.fileExists(atPath: self.home(home).path)
+            // The CLI's data directory is what the usage provider reads; a config file alone can be a leftover.
+            case .devin:
+                return fileManager.fileExists(atPath: home.appendingPathComponent(".local/share/devin/cli/sessions.db").path)
             // The session folder is what the usage provider reads; a settings folder alone can be the IDE extension's.
             case .codebuddy, .workbuddy:
                 return fileManager.fileExists(atPath: self.home(home).appendingPathComponent("projects").path)

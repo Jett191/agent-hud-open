@@ -5,7 +5,7 @@ import Foundation
 /// declaration (`ClientDeclarations`).
 public enum AgentClient: String, CaseIterable, Sendable {
     case claude, codex, deepseek, antigravity, cursor, grokCLI, grokBot, copilot, openclaw, hermes, zcode, codebuddy,
-         workbuddy, qwen, opencode, kimi, pi, qoder, qoderCN, qoderWork
+         workbuddy, qwen, opencode, kimi, pi, qoder, qoderCN, qoderWork, devin
 
     /// The execution agent its sessions are grouped under (`SessionSource.agentVendors`); nil for a client whose
     /// sessions are not read, as the Qoder builds', which only ask for approvals.
@@ -16,7 +16,7 @@ public enum AgentClient: String, CaseIterable, Sendable {
         case .deepseek: "DeepSeek"
         case .grokCLI: "Grok CLI"
         case .grokBot: "Grok Bot"
-        case .antigravity, .cursor, .copilot, .openclaw, .hermes, .zcode, .codebuddy, .workbuddy, .qwen:
+        case .antigravity, .cursor, .copilot, .openclaw, .hermes, .zcode, .codebuddy, .workbuddy, .qwen, .devin:
             AdditionalSource(rawValue: rawValue)!.vendor
         case .opencode, .kimi, .pi: OpenAgentSource(rawValue: rawValue)!.name
         case .qoder, .qoderCN, .qoderWork: nil

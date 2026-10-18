@@ -44,6 +44,9 @@ public enum VendorCatalog {
             windows: ["gpt-reserve": "Luna Reserve"], windowWords: ["gpt-reserve": "Reserve"]),
         "Cursor": Entry(bundleIDs: ["com.todesktop.230313mzl4w4u92"]),
         "Grok Bot": Entry(bundleIDs: ["com.anysphere.sand"]),
+        // Devin CLI's own home is `~/.local/share/devin`; the desktop app is the Windsurf build it ships with.
+        "Devin": Entry(bundleIDs: ["com.exafunction.windsurf"],
+                       clients: ["devin": "Devin CLI", "cli": "Devin CLI", "vscode": "Devin Desktop"]),
         // An API balance, not a subscription: its rows stay out of the HUD until switched on.
         "DeepSeek": Entry(startsHidden: true),
     ]

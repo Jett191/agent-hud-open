@@ -162,6 +162,24 @@ final class LedgerFileStoreTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(total, 20, "what the reader did not return is not gone")
     }
 
+    func testPartialSessionReadsKeepOmittedEventsUntilACompleteRead() async throws {
+        let ledger = UsageLedger.inMemory(), recorder = SessionLedger(source: "fixture", ledger: ledger)
+        func event(_ id: String, _ input: Int) -> UsageEvent {
+            UsageEvent(timestamp: Self.base, agentId: "fixture-model:m", tokensIn: input, tokensOut: 0, eventID: id)
+        }
+        await recorder.record(files: nil, revision: 1, window: .distantPast) { [("s", [event("a", 10), event("b", 20)])] }
+        for revision in 2...3 {
+            await recorder.record(files: nil, revision: revision, window: .distantPast, complete: false) {
+                [("s", [event("a", 15), event("c", 30)])]
+            }
+            let total = try await tokens(ledger)
+            XCTAssertEqual(total, 65, "a partial read updates known events and adds new ones without dropping omitted events")
+        }
+        await recorder.record(files: nil, revision: 4, window: .distantPast) { [("s", [event("c", 30)])] }
+        let total = try await tokens(ledger)
+        XCTAssertEqual(total, 30, "a complete snapshot still replaces the session's history")
+    }
+
     func testRunningTotalsKeepTheirFirstCountsAtTheRowsTimeAndDateTheirGrowthWhenRead() async throws {
         let ledger = UsageLedger.inMemory(), files = ListedFiles(paths: ["/state.db"], sessions: ["/state.db": ["h"]])
         // The row began a day before the window, and grows while it is read.

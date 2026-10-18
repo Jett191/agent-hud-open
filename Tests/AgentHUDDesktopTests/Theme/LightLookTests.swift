@@ -138,6 +138,22 @@ final class LightLookTests: XCTestCase {
         }
     }
 
+    /// Devin's pale tile stays visible on either ground after it morphs into a bot.
+    func testDevinDrawsItsTileBotInReadableInkOnBothGrounds() throws {
+        for ground in [HUDLook.Appearance.dark, .light] {
+            let form = try XCTUnwrap(BotForm.form(for: "Devin", ground: ground))
+            var motion = BotMotion(seed: 3)
+            motion.fit(form.spec)
+            motion.set(.working, at: 0)
+            for frame in 0...30 { motion.step(to: Double(frame) / 30) }
+            XCTAssertEqual(motion.morph, 1)
+            let image = try XCTUnwrap(BotRenderer.image(form, motion: motion, side: 40))
+            let brightness = Self.brightness(of: image)
+            if ground == .dark { XCTAssertGreaterThan(brightness, 0.9, "light tile and dark eyes on the dark HUD") }
+            else { XCTAssertLessThan(brightness, 0.2, "dark tile and light eyes on the light HUD") }
+        }
+    }
+
     /// A form is read once for each mark and ground, and a single-colour mark's is a stencil in that ground's ink.
     func testABotsFormIsReadOncePerMarkAndGround() throws {
         let dark = try XCTUnwrap(BotForm.form(for: "Cursor", ground: .dark))

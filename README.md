@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Your agents, at a glance.</strong><br>
-  Usage, tokens and sessions for Claude Code, Codex and 15 more agents, at your Mac's notch or any screen edge.
+  Usage, tokens and sessions for Claude Code, Codex and 16 more agents, at your Mac's notch or any screen edge.
 </p>
 
 <p align="center">
@@ -125,7 +125,7 @@ The last three need Agent HUD Remote on the same network too. It is a subscripti
 
 ## Supported agents
 
-Install and sign in to the agents you want to monitor; Agent HUD finds them by itself. All 17 report tokens and sessions.
+Install and sign in to the agents you want to monitor; Agent HUD finds them by itself. All 18 report tokens and sessions.
 
 | Agent | Quota | Live status | Approvals | Questions | Replies | One click back | Turns and calls |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -146,6 +146,9 @@ Install and sign in to the agents you want to monitor; Agent HUD finds them by i
 | **CodeBuddy** |  |  | ✓ |  | ✓ |  |  |
 | **WorkBuddy** |  |  | ✓ |  |  |  |  |
 | **Qwen&nbsp;Code** |  |  | ✓ |  | ✓ |  |  |
+| **Devin&nbsp;CLI** | ✓ (cached) | ✓ | ✓ |  | ✓ |  |  |
+
+Devin's daily and weekly quotas come from its local CLI cache; refresh them in the CLI to update the readings.
 
 Also: the **GLM Coding Plan** quota, and approvals for the **Qoder** builds. Codex approvals need its hook trusted in Codex, and Copilot's quota your consent in Settings. The rest is in [each agent's details](docs/providers.md).
 
