@@ -112,7 +112,7 @@ final class HUDToolsBalanceTests: HUDToolsCase {
         ])])])
         XCTAssertEqual(layout.draft, PanelLayout(blocks: ["api:DeepSeek": PanelLayout.Block(measures: [.burnRate, .cost])]))
         XCTAssertEqual(try block("api:DeepSeek", in: picked)["measures"], .array([.string("burn"), .string("cost")]))
-        XCTAssertEqual(try block("api:DeepSeek", in: picked)["offeredMeasures"], .array(["quota", "burn", "cost"].map(JSONValue.string)))
+        XCTAssertEqual(try block("api:DeepSeek", in: picked)["offeredMeasures"], .array(["quota", "burn", "tokens", "consumed", "cost"].map(JSONValue.string)))
 
         // What get_hud reads back is the layout, sent back unchanged.
         let revision = layout.revision
@@ -123,9 +123,23 @@ final class HUDToolsBalanceTests: HUDToolsCase {
 
         // Every measure the number offers, in its order, is the default view.
         _ = try result(MCPTools.draftHUD, ["blocks": .object(["api:DeepSeek": .object([
-            "measures": .array(["quota", "burn", "cost"].map(JSONValue.string)),
+            "measures": .array(["quota", "burn", "tokens", "consumed", "cost"].map(JSONValue.string)),
         ])])])
         XCTAssertNil(layout.draft)
+    }
+
+    func testABalanceAcceptsReplySpeedAndConsumptionAndRoundTripsTheDraft() throws {
+        let panel = try result(MCPTools.draftHUD, ["blocks": .object(["api:DeepSeek": .object([
+            "widget": .string("number"), "measures": .array(["consumed", "tokens", "consumed"].map(JSONValue.string)),
+        ])])])
+        let expected = PanelLayout(blocks: ["api:DeepSeek": PanelLayout.Block(measures: [.consumed, .tokens])])
+        XCTAssertEqual(layout.draft, expected)
+        XCTAssertEqual(try block("api:DeepSeek", in: panel)["measures"], .array(["consumed", "tokens"].map(JSONValue.string)))
+        let revision = layout.revision
+        let sent = try XCTUnwrap(try result(MCPTools.getHUD)["layout"]?.objectValue)
+        _ = try result(MCPTools.draftHUD, sent)
+        XCTAssertEqual(layout.draft, expected)
+        XCTAssertEqual(layout.revision, revision, "reading and proposing the same new measures changes no draft")
     }
 
     func testAWidgetOrAMeasureABalanceDoesNotTakeIsRefusedWithTheReason() throws {
@@ -135,10 +149,10 @@ final class HUDToolsBalanceTests: HUDToolsCase {
         XCTAssertTrue(refused.contains(#"blocks.api:DeepSeek.measures[1]: The "chart" widget of "api:DeepSeek" does not offer the "#
                                        + #"measure "burn". The "chart" widget of an API balance draws its estimated cost over its "#
                                        + #"period. It offers: "cost"."#), refused)
-        let tokens = try refusal(["blocks": .object(["api:DeepSeek": .object(["measures": .array([.string("tokens")])])])])
-        XCTAssertTrue(tokens.contains(#"blocks.api:DeepSeek.measures[0]: The "number" widget of "api:DeepSeek" does not offer the "#
-                                      + #"measure "tokens". An API balance is measured in money; the tokens of its models are in the "#
-                                      + #"token chart. It offers: "quota", "burn", "cost"."#), tokens)
+        let consumed = try refusal(["blocks": .object(["api:DeepSeek": .object([
+            "widget": .string("chart"), "measures": .array([.string("consumed")]),
+        ])])])
+        XCTAssertTrue(consumed.contains(#"measure "consumed". The "chart" widget of an API balance draws its estimated cost"#), consumed)
         for widget in ["bar", "ring"] {
             let ceiling = try refusal(["blocks": .object(["api:DeepSeek": .object(["widget": .string(widget)])])])
             XCTAssertTrue(ceiling.contains(#"is an API balance, which has no ceiling, so the "\#(widget)" widget has nothing to "#

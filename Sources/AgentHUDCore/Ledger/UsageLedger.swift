@@ -29,6 +29,17 @@ public actor UsageLedger {
         static let goneSignature = "gone"
     }
 
+    /// One call's completion, for reply-speed math: which log it belongs to, when it finished, what it produced.
+    public struct ReplyEvent: Hashable, Sendable {
+        public let contribution: Int64
+        public let agent: String
+        public let atMs: Int64
+        public let out: Int
+        public init(contribution: Int64, agent: String, atMs: Int64, out: Int) {
+            self.contribution = contribution; self.agent = agent; self.atMs = atMs; self.out = out
+        }
+    }
+
     /// One token observation after the provider resolved duplicates; `key` is unique within its contribution.
     public struct Event: Hashable, Sendable {
         public let key: String
@@ -447,6 +458,27 @@ public actor UsageLedger {
                                   listCost: ModelCatalog.cost(agentId: agentId, kinds: tokens.kinds)?.amount))
         }
         return calls
+    }
+
+    /// Calls since `sinceMs` in logs containing these agents, oldest first per log. Other models' calls stay as timing
+    /// context: the reply-speed math times each selected call by the call immediately before it in that contribution.
+    public func replyEvents(agents: Set<String>, sinceMs: Int64) throws -> [ReplyEvent] {
+        guard !agents.isEmpty else { return [] }
+        var found: [ReplyEvent] = []
+        let names = "[" + agents.sorted().map { "\"" + $0.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"") + "\"" }.joined(separator: ",") + "]"
+        try storage.connection.query("""
+            SELECT e.contribution_id, a.name, e.timestamp_ms, e.tokens_out FROM usage_event e
+            JOIN agent a ON a.id = e.agent
+            WHERE e.timestamp_ms >= ? AND e.contribution_id IN (
+                SELECT selected.contribution_id FROM usage_event selected
+                JOIN agent selected_agent ON selected_agent.id = selected.agent
+                WHERE selected.timestamp_ms >= ? AND selected_agent.name IN (SELECT value FROM json_each(?)))
+            ORDER BY e.contribution_id, e.timestamp_ms
+            """, [.integer(sinceMs), .integer(sinceMs), .text(names)]) { row in
+            found.append(ReplyEvent(contribution: row.int(0), agent: row.text(1) ?? "", atMs: row.int(2), out: Int(row.int(3))))
+        }
+        return found
     }
 
     /// The contributions that hold a session: its own logs, among them the one that records every call, and its sub-agents' logs.

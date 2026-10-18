@@ -20,7 +20,9 @@ final class BalanceMeasuresViewTests: XCTestCase {
 
     /// A store over settings of its own whose one account is DeepSeek's, read at `now` unless its read failed: its CNY
     /// balance and its recorded costs, as (hours before `now`, amounts by currency).
-    private func store(_ total: String = "8.85", costs: [(Double, [String: String])], failed: Bool = false) throws -> UsageStore {
+    private func store(_ total: String = "8.85", costs: [(Double, [String: String])], failed: Bool = false,
+                       consumers: [AgentDescriptor] = [], usage: [UsageBucket] = [],
+                       replyRates: [String: QuotaReplyRate]? = nil) throws -> UsageStore {
         _ = NSApplication.shared
         let suite = "app.agenthud.tests.balance-measures.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -37,7 +39,8 @@ final class BalanceMeasuresViewTests: XCTestCase {
                 CostBucket(start: now.addingTimeInterval(-hours * 3600), amounts: amounts.mapValues { Decimal(string: $0)! })
             },
             notice: failed ? "offline" : nil, readingIssue: failed ? .readFailed("offline") : nil)
-        store.replace(report: UsageReport(generatedAt: now, snapshots: [], sessions: [], billing: [billing]))
+        store.replace(report: UsageReport(generatedAt: now, snapshots: [], sessions: [], consumers: consumers, usage: usage,
+                                         billing: [billing], replyRates: replyRates))
         XCTAssertEqual(store.enabledBilling.count, 1)
         return store
     }
@@ -94,6 +97,10 @@ final class BalanceMeasuresViewTests: XCTestCase {
         let idle = try metrics(try store(costs: []))
         XCTAssertEqual(idle.figure(.first, of: .burnRate).value, "¥0.00/day")
         XCTAssertEqual(idle.figure(.second, of: .burnRate), figure("Runs out", "No usage", .secondary), "nothing spent gives no time")
+        for measure in [PanelMeasure.tokens, .consumed] {
+            XCTAssertEqual(idle.figure(.first, of: measure).value, "—")
+            XCTAssertEqual(idle.figure(.second, of: measure).value, "—")
+        }
 
         let failed = try metrics(try store(costs: [(1, ["CNY": "0.3"])], failed: true))
         XCTAssertNil(failed.level, "a balance whose read failed shows no level")
@@ -104,6 +111,38 @@ final class BalanceMeasuresViewTests: XCTestCase {
         let empty = try metrics(try store("0", costs: [(1, ["CNY": "0.3"])]))
         XCTAssertEqual(empty.level, .critical)
         XCTAssertEqual(empty.figure(.second, of: .burnRate), figure("Runs out", "Exhausted", .level))
+    }
+
+    func testTokenMeasuresReadOnlyTheBalancesConsumersAndSelectedPeriod() throws {
+        L10n.setLanguage(.en)
+        let model = AgentDescriptor(id: "deepseek-model:test", vendor: "DeepSeek", model: "test", source: "local", enabled: true)
+        let other = AgentDescriptor(id: "claude-model:test", vendor: "Claude", model: "test", source: "local", enabled: true)
+        let usage = [
+            UsageBucket(start: now.addingTimeInterval(-3600), agentId: model.id, tokensIn: 1400, tokensOut: 400, cacheReadTokens: 200),
+            UsageBucket(start: now.addingTimeInterval(-72 * 3600), agentId: model.id, tokensIn: 2800, tokensOut: 100, cacheReadTokens: 100),
+            UsageBucket(start: now.addingTimeInterval(-200 * 3600), agentId: model.id, tokensIn: 9000, tokensOut: 0),
+            UsageBucket(start: now.addingTimeInterval(-3600), agentId: other.id, tokensIn: 999_000, tokensOut: 0),
+            UsageBucket(start: now.addingTimeInterval(3600), agentId: model.id, tokensIn: 9000, tokensOut: 0),
+        ]
+        let store = try store(costs: [], consumers: [model, other], usage: usage,
+            replyRates: ["api:DeepSeek": .init(tokensPerSecond: 8.5, calls: 17, tokensOut: 1700),
+                         "api:other": .init(tokensPerSecond: 999, calls: 99, tokensOut: 99_000)])
+        let week = try metrics(store)
+        XCTAssertEqual(week.tokens, 5000, "input, output and cache reads belong to this balance, within its period")
+        XCTAssertEqual(week.figure(.first, of: .tokens), figure("Reply rate · Last 7 days", "8.5/s", .text))
+        XCTAssertEqual(week.figure(.second, of: .tokens), figure("Replies", "17", .text))
+        XCTAssertEqual(week.figure(.first, of: .consumed), figure("Tokens · Last 7 days", "5.0k", .text))
+        XCTAssertEqual(week.figure(.second, of: .consumed), figure("Pace", "30/h", .text))
+        let day = try metrics(store, period: .day)
+        XCTAssertEqual(day.tokens, 2000)
+        XCTAssertEqual(day.figure(.first, of: .consumed), figure("Tokens · Last 24 h", "2.0k", .text))
+        XCTAssertEqual(day.figure(.second, of: .consumed), figure("Pace", "83/h", .text))
+        L10n.setLanguage(.zhHans)
+        let chinese = try metrics(store)
+        XCTAssertEqual(chinese.figure(.first, of: .tokens), figure("回复速率 · 近 7 天", "8.5/s", .text))
+        XCTAssertEqual(chinese.figure(.second, of: .tokens).caption, "回复次数")
+        XCTAssertEqual(chinese.figure(.first, of: .consumed).caption, "Token 消耗 · 近 7 天")
+        XCTAssertEqual(chinese.figure(.second, of: .consumed).caption, "平均速率")
     }
 
     /// Within seven days a run-out names its calendar week, weekday and time; then a date and time; and from a year on, the
@@ -122,7 +161,7 @@ final class BalanceMeasuresViewTests: XCTestCase {
 
     // MARK: How tall
 
-    private func card(_ store: UsageStore, measure: PanelMeasure, measures: [PanelMeasure] = [.quota, .burnRate, .cost],
+    private func card(_ store: UsageStore, measure: PanelMeasure, measures: [PanelMeasure] = [.quota, .burnRate, .tokens, .consumed, .cost],
                       picker: Bool = true, width: CGFloat, half: Bool, spacing: PanelSpacing = .regular,
                       period: PanelTokenPeriod = .week) throws -> CGFloat {
         let account = try XCTUnwrap(store.enabledBilling.first)
@@ -142,9 +181,12 @@ final class BalanceMeasuresViewTests: XCTestCase {
     func testTheCardIsAsTallInEveryMeasureWithEveryCaptionAndFigureOnOneLine() throws {
         for language in [AppLanguage.en, .zhHans] {
             L10n.setLanguage(language)
-            let store = try store(costs: [(1, ["CNY": "0.3"]), (72, ["CNY": "0.4"])])
+            let model = AgentDescriptor(id: "deepseek-model:test", vendor: "DeepSeek", model: "test", source: "local", enabled: true)
+            let store = try store(costs: [(1, ["CNY": "0.3"]), (72, ["CNY": "0.4"])], consumers: [model],
+                usage: [.init(start: now.addingTimeInterval(-3600), agentId: model.id, tokensIn: 12_345_678, tokensOut: 3000)],
+                replyRates: ["api:DeepSeek": .init(tokensPerSecond: 123.4, calls: 1234, tokensOut: 3000)])
             let metrics = try metrics(store)
-            let measures: [PanelMeasure] = [.quota, .burnRate, .cost]
+            let measures: [PanelMeasure] = [.quota, .burnRate, .tokens, .consumed, .cost]
             let figures = measures.flatMap { [metrics.figure(.first, of: $0), metrics.figure(.second, of: $0)] }
             let widest = figures.map { max(textWidth($0.caption, .ui(11)), textWidth($0.value, .tabular(15, .semibold))) }.max() ?? 0
             let column = figures.map { figure in
@@ -178,7 +220,7 @@ final class BalanceMeasuresViewTests: XCTestCase {
         L10n.setLanguage(.en)
         let store = try store(costs: [(1, ["CNY": "0.3"])])
         let whole = IslandController.expandedWidth - HoverPanelView.notchInsets.leading - HoverPanelView.notchInsets.trailing
-        for (width, half) in [(whole, false), (CGFloat(260), true)] {
+        for (width, half) in [(whole, false), (CGFloat(230), true), (CGFloat(260), true)] {
             XCTAssertEqual(try card(store, measure: .quota, width: width, half: half),
                            try card(store, measure: .quota, measures: [.quota], picker: false, width: width, half: half),
                            accuracy: 0.5, "in \(width) pt")
@@ -188,7 +230,7 @@ final class BalanceMeasuresViewTests: XCTestCase {
     // MARK: In the panel
 
     /// In the panel a balance's block starts from the first measure its layout lists and is as tall in each, the default
-    /// view's three included; drawn as a chart it is taller, and it takes half a line beside another chart.
+    /// view's five included; drawn as a chart it is taller, and it takes half a line beside another chart.
     func testThePanelDrawsABalanceAsItsLayoutAsks() throws {
         L10n.setLanguage(.en)
         _ = NSApplication.shared

@@ -1,3 +1,4 @@
+import AgentHUDSupport
 import Foundation
 
 /// Providers that write their token events to the usage ledger themselves.
@@ -156,6 +157,10 @@ public struct CombinedUsageProvider: UsageProvider {
                                           listedSince: SessionWindow.start(at: now))
         let progress = reports.compactMap(\.indexing)
         let sessionUsage = await breakdowns(of: sessions)
+        let consumerIdsByQuota = reports.reduce(into: [String: Set<String>]()) {
+            $0.merge($1.consumerIdsByQuota, uniquingKeysWith: { $0.union($1) })
+        }
+        let replyRates = await replyRates(of: consumerIdsByQuota, reports: reports, now: now)
         return UsageReport(generatedAt: now, snapshots: Dictionary(grouping: reports.flatMap(\.snapshots), by: \.agentId).values.compactMap { $0.max { $0.updatedAt < $1.updatedAt } }.sorted { $0.agentId < $1.agentId },
                            sessions: sessions.sorted { a, b in
                                if a.isLive != b.isLive { return a.isLive }
@@ -168,7 +173,7 @@ public struct CombinedUsageProvider: UsageProvider {
                            insightsByAgent: reports.reduce(into: [:]) { $0.merge($1.insightsByAgent, uniquingKeysWith: { _, new in new }) },
                            subscriptions: reports.reduce(into: [:]) { $0.merge($1.subscriptions, uniquingKeysWith: { _, new in new }) }, sourceNotices: notices,
                            quotaNotices: quotaNotices, readingIssues: issues,
-                           consumerIdsByQuota: reports.reduce(into: [:]) { $0.merge($1.consumerIdsByQuota, uniquingKeysWith: { $0.union($1) }) },
+                           consumerIdsByQuota: consumerIdsByQuota,
                            billing: Self.mergeBilling(reports.flatMap(\.billing)), codexResetCredits: reports.first { $0.codexResetCredits != nil }?.codexResetCredits,
                            codexResetCreditsObservedAt: reports.first { $0.codexResetCredits != nil }?.codexResetCreditsObservedAt,
                            completions: reports.flatMap(\.completions),
@@ -180,7 +185,7 @@ public struct CombinedUsageProvider: UsageProvider {
                                $0.merge($1, uniquingKeysWith: +)
                            },
                            forgottenAccountProviders: reports.compactMap(\.forgottenAccountProviders).reduce(nil) { ($0 ?? []).union($1) },
-                           sessionUsage: sessionUsage,
+                           sessionUsage: sessionUsage, replyRates: replyRates,
                            sessionCredits: reports.compactMap(\.sessionCredits).reduce(into: [String: SessionCredits]()) { $0.merge($1) { _, new in new } },
                            periods: periods, recached: recached)
     }
@@ -211,6 +216,40 @@ public struct CombinedUsageProvider: UsageProvider {
             await results.storeBreakdowns(kept, mark: requests.isEmpty ? now : mark)
         }
         return kept.compactMapValues(\.usage)
+    }
+
+    /// Each window's models' reply speed, from the gaps between its calls in the ledger: the last hour when it has
+    /// calls, otherwise whatever the ledger still holds, so a quiet week still reads at its last observed speed. A
+    /// pool whose own key left no calls borrows the speed of its models in other clients — how fast a GLM replies is
+    /// the model's, not the credential's.
+    private func replyRates(of consumersByWindow: [String: Set<String>], reports: [UsageReport], now: Date) async -> [String: QuotaReplyRate] {
+        let poolProviders = reports.flatMap(\.discoveredAgents).reduce(into: [String: String]()) {
+            if let provider = $1.billingPool?.provider { $0[$1.id] = provider }
+        }
+        let allDescriptors = UsageAggregation.consumersUnion(reports.map(\.consumers))
+        let allConsumers = Set(allDescriptors.map(\.id))
+        var consumers = consumersByWindow.reduce(into: [String: Set<String>]()) { result, pair in
+            var ids = pair.value
+            if let provider = poolProviders[pair.key] {
+                ids.formUnion(allConsumers.filter { $0.localizedCaseInsensitiveContains(provider) })
+            }
+            result[pair.key] = ids
+        }
+        // An API balance has no window, but its models' speed reads the same under its block's key.
+        for billing in reports.flatMap(\.billing) {
+            let owned = Set(allDescriptors.filter { billing.contains($0) }.map(\.id))
+            if !owned.isEmpty { consumers[billing.panelBlockKey] = owned }
+        }
+        let agents = Set(consumers.values.joined())
+        guard !agents.isEmpty,
+              let events = try? await ledger.replyEvents(agents: agents,
+                    sinceMs: RecordCoding.milliseconds(now.addingTimeInterval(-7 * 86400)))
+        else { return [:] }
+        let horizon = RecordCoding.milliseconds(now.addingTimeInterval(-3600))
+        let recent = events.filter { $0.atMs >= horizon }
+        return consumers.compactMapValues {
+            QuotaMath.replyRate(events: recent, consumers: $0) ?? QuotaMath.replyRate(events: events, consumers: $0)
+        }
     }
     /// Each vendor's checks come from its last result, so a quiet vendor is read again only when its activity ages.
     public func sourceChecks() async -> [String: [Date]] {

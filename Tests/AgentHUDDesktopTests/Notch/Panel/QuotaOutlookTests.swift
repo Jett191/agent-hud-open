@@ -28,6 +28,9 @@ final class QuotaOutlookTests: XCTestCase {
         let insights: (burn: Double?, exhaust: TimeInterval?)?
         /// How far the window's readings have come while they are too few for a burn rate.
         var sampling: QuotaSampling? = nil
+        var replyRate: QuotaReplyRate? = nil
+        var used: Int64? = nil
+        var capacity: Int64? = nil
     }
 
     private var grid: [Window] {
@@ -133,14 +136,33 @@ final class QuotaOutlookTests: XCTestCase {
     @MainActor
     func testTheRowsOtherMeasuresAndAFarExhaustion() throws {
         let far = Window(name: "monthly", remaining: 50, resetIn: 20 * 86400, duration: 30 * 86400, insights: (0.2, 10 * 86400))
-        try withStore([grid[9], far]) { store in
+        var window = grid[9]
+        window.replyRate = QuotaReplyRate(tokensPerSecond: 9.5, calls: 3, tokensOut: 570)
+        try withStore([window, far]) { store in
             let row = try metrics("exhaustsBeforeReset", in: store)
             // The model the windows count has no list price, so the cycle has no cost.
-            XCTAssertEqual(PanelMeasure.allCases.map { row.value($0) }, ["90%", "10.0%/h", "1.0k/h", nil])
-            XCTAssertEqual(PanelMeasure.allCases.map { row.detail($0, isLoading: false) }, ["2h 00m", ChartData.relativeWeekdayTime(now.addingTimeInterval(hour), now: now), "24k / day", "—"])
+            XCTAssertEqual(PanelMeasure.allCases.map { row.value($0) }, ["90%", "10.0%/h", "9.5/s", "3.0k", nil])
+            XCTAssertEqual(PanelMeasure.allCases.map { row.detail($0, isLoading: false) },
+                           ["2h 00m", ChartData.relativeWeekdayTime(now.addingTimeInterval(hour), now: now), "3 replies", "1.0k/h", "—"])
+            XCTAssertEqual(store.view.consumed(for: window.name)?.used, 3000, "only the cycle's selected model counts")
             let date = now.addingTimeInterval(10 * 86400)
             XCTAssertEqual(try metrics("monthly", in: store).exhaustionTimeLabel, date.formatted(Date.FormatStyle().month(.abbreviated).day()
                 .hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).locale(Locale(identifier: "en_GB"))))
+        }
+    }
+
+    @MainActor
+    func testReportedConsumptionUsesItsCapacityAndDoesNotInventAReplyRate() throws {
+        var window = grid[9]
+        window.used = 7500
+        window.capacity = 30_000
+        try withStore([window]) { store in
+            let row = try metrics(window.name, in: store)
+            XCTAssertEqual(row.value(.consumed), "7.5k", "the provider's cycle tally takes priority over local tokens")
+            XCTAssertEqual(row.detail(.consumed, isLoading: false), "/ 30k")
+            XCTAssertEqual(store.quotaTokensPerHour(for: window.name), 1000)
+            XCTAssertNil(row.value(.tokens), "token consumption alone supplies no call timing")
+            XCTAssertEqual(row.detail(.tokens, isLoading: false), "—")
         }
     }
 
@@ -148,15 +170,21 @@ final class QuotaOutlookTests: XCTestCase {
     /// no burn rate, projection or token rate, and neither the island nor the menu gives it a hint.
     @MainActor
     func testAWindowWhoseReadingShowsNoLevelHasNoForecast() throws {
-        try withStore([grid[9]], quotaNotices: ["Codex": "Codex quota could not be read"]) { store in
+        var window = grid[9]
+        window.replyRate = QuotaReplyRate(tokensPerSecond: 12, calls: 4, tokensOut: 480)
+        window.used = 7500
+        window.capacity = 30_000
+        try withStore([window], quotaNotices: ["Codex": "Codex quota could not be read"]) { store in
             let row = try metrics("exhaustsBeforeReset", in: store)
             XCTAssertNil(row.row.level)
-            XCTAssertEqual(PanelMeasure.allCases.map { row.value($0) }, ["90%", nil, nil, nil])
-            XCTAssertEqual(PanelMeasure.allCases.map { row.detail($0, isLoading: false) }, ["2h 00m", "—", "—", "—"])
+            XCTAssertEqual(PanelMeasure.allCases.map { row.value($0) }, ["90%", nil, nil, nil, nil])
+            XCTAssertEqual(PanelMeasure.allCases.map { row.detail($0, isLoading: false) }, ["2h 00m", "—", "—", "—", "—"])
             XCTAssertNil(row.exhaustsBeforeReset)
             XCTAssertNil(row.projectedAtReset)
             XCTAssertNil(store.quotaForecastHint(for: "exhaustsBeforeReset"))
             XCTAssertNil(store.quotaTokensPerHour(for: "exhaustsBeforeReset"))
+            XCTAssertNil(store.view.replyRate(for: window.name))
+            XCTAssertNil(store.view.consumed(for: window.name))
             XCTAssertNil(store.maxUsedPct)
         }
     }
@@ -169,13 +197,15 @@ final class QuotaOutlookTests: XCTestCase {
         let agent = AgentDescriptor(id: "grok", vendor: "Grok", model: "Weekly usage limit", source: "Test", enabled: true)
         let store = UsageStore(provider: DemoUsageProvider(), settings: SettingsStore(defaults: defaults, defaultAgents: [agent]))
         store.replace(report: UsageReport(generatedAt: now,
-            snapshots: [.init(agentId: agent.id, remainingPct: nil, resetAt: now.addingTimeInterval(2 * hour), updatedAt: now)],
+            snapshots: [.init(agentId: agent.id, remainingPct: nil, resetAt: now.addingTimeInterval(2 * hour), updatedAt: now,
+                              used: 7500, capacity: 30_000)],
             sessions: [], discoveredAgents: [agent],
             insightsByAgent: [agent.id: .init(burnRatePctPerHour: 10, timeToExhaust: hour, weeklyCapHits: 0,
-                weeklyWaitTotal: 0, weeklyWaitLongest: 0, weeklyWaitLongestAt: nil)]))
+                weeklyWaitTotal: 0, weeklyWaitLongest: 0, weeklyWaitLongestAt: nil)],
+            replyRates: [agent.id: .init(tokensPerSecond: 12, calls: 4, tokensOut: 480)]))
         store.now = now
         let unknown = try metrics(agent.id, in: store)
-        XCTAssertEqual(PanelMeasure.allCases.map { unknown.value($0) }, ["N/A", nil, nil, nil])
+        XCTAssertEqual(PanelMeasure.allCases.map { unknown.value($0) }, ["N/A", nil, nil, nil, nil])
         XCTAssertEqual(unknown.detail(.quota, isLoading: false), "2h 00m")
         XCTAssertNil(unknown.row.usedPct)
         XCTAssertNil(unknown.row.level)
@@ -202,7 +232,7 @@ final class QuotaOutlookTests: XCTestCase {
             generatedAt: now,
             snapshots: windows.map {
                 UsageSnapshot(agentId: $0.name, remainingPct: $0.remaining, resetAt: $0.resetIn.map(now.addingTimeInterval),
-                              windowDuration: $0.duration, updatedAt: now)
+                              windowDuration: $0.duration, updatedAt: now, used: $0.used, capacity: $0.capacity)
             },
             sessions: [], discoveredAgents: agents, usage: usage,
             insightsByAgent: Dictionary(uniqueKeysWithValues: windows.compactMap { window in
@@ -212,7 +242,8 @@ final class QuotaOutlookTests: XCTestCase {
                 }
             }),
             sourceNotices: quotaNotices, quotaNotices: quotaNotices,
-            consumerIdsByQuota: Dictionary(uniqueKeysWithValues: windows.map { ($0.name, ["m"]) })))
+            consumerIdsByQuota: Dictionary(uniqueKeysWithValues: windows.map { ($0.name, ["m"]) }),
+            replyRates: Dictionary(uniqueKeysWithValues: windows.compactMap { window in window.replyRate.map { (window.name, $0) } })))
         store.now = now
         try body(store)
     }
@@ -222,6 +253,7 @@ final class QuotaOutlookTests: XCTestCase {
     private func metrics(_ id: String, in store: UsageStore) throws -> QuotaRowMetrics {
         QuotaRowMetrics(row: try XCTUnwrap(store.row(for: id)), insights: store.report?.insightsByAgent[id],
                         outlook: store.view.outlook(for: id), now: store.now, tokensPerHour: store.quotaTokensPerHour(for: id),
+                        replyRate: store.view.replyRate(for: id), consumed: store.view.consumed(for: id),
                         cost: store.view.listCost(for: id))
     }
 }

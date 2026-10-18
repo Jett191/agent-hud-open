@@ -43,6 +43,8 @@ struct APIBillingCard: View {
                 Text(billing.displayName)
                     .font(compact ? IslandRowLayout.headingFont : .ui(12, .semibold))
                     .foregroundStyle(theme.text)
+                    .fixedSize(horizontal: half, vertical: false)
+                    .layoutPriority(1)
                 Spacer()
                 if let picker {
                     // The picker stands over the heading's padding rather than making its line taller, so the card is as
@@ -234,6 +236,13 @@ struct BalanceMetrics {
     let level: StatusLevel?
     /// What the account spent in the balance's currency over the period; nil where a request had no price in it.
     let spend: BalanceSpend?
+    /// The output tokens per second the balance's models reply at, from the ledger's call gaps; nil where none
+    /// answered recently.
+    let replyRate: QuotaReplyRate?
+    /// The tokens the balance's consumers recorded over the period; nil where none are recorded.
+    let tokens: Int?
+    /// The tokens per hour the balance's consumers recorded over the period's elapsed part.
+    let tokensPerHour: Double?
     /// When the balance runs out at the burn rate, where its reading shows a level and the pace gives a time.
     let runsOut: Date?
     let currency: String
@@ -250,6 +259,9 @@ struct BalanceMetrics {
         let interval = period.map { store.hudTokenInterval($0) } ?? store.statsInterval
         let spent = billing.spend(currency: currency, during: interval, now: store.dataDate)
         spend = spent
+        replyRate = store.view.billingReplyRate(billing)
+        tokens = store.view.billingTokens(billing, during: interval)
+        tokensPerHour = store.view.billingTokensPerHour(billing, during: interval)
         runsOut = balance.flatMap { balance in spent.flatMap { store.balanceRunsOut(balance, billing: billing, at: $0) } }
         now = store.dataDate
         periodLabel = (period?.range ?? store.statsRange).recentLabel
@@ -259,6 +271,20 @@ struct BalanceMetrics {
         switch (measure, side) {
         case (.burnRate, .first): burnRate(caption: L10n.text("消耗速率 · ", "Burn rate · ") + periodLabel)
         case (.burnRate, .second): runOut
+        case (.tokens, .first):
+            Figure(caption: L10n.text("回复速率 · ", "Reply rate · ") + periodLabel,
+                   value: replyRate.map { $0.tokensPerSecond < 10 ? String(format: "%.1f/s", $0.tokensPerSecond)
+                                                                    : "\(Int($0.tokensPerSecond))/s" } ?? "—",
+                   ink: .text)
+        case (.tokens, .second):
+            Figure(caption: L10n.text("回复次数", "Replies"),
+                   value: replyRate.map { "\($0.calls)" } ?? "—", ink: .text)
+        case (.consumed, .first):
+            Figure(caption: L10n.text("Token 消耗 · ", "Tokens · ") + periodLabel,
+                   value: tokens.map { TokenFormat.short($0) } ?? "—", ink: .text)
+        case (.consumed, .second):
+            Figure(caption: L10n.text("平均速率", "Pace"),
+                   value: tokensPerHour.map { TokenFormat.short(Int($0.rounded())) + "/h" } ?? "—", ink: .text)
         case (.cost, .first): cost
         case (.cost, .second): burnRate(caption: L10n.text("消耗速率", "Burn rate"))
         case (_, .first):

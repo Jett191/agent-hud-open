@@ -12,7 +12,7 @@ public enum PanelWidget: String, Codable, CaseIterable, Sendable {
 /// What a block shows, the reading its picker flips in place: a quota window's share, or an API account's balance
 /// (`quota`), how fast that goes (`burnRate`, written `burn`), tokens, or cost.
 public enum PanelMeasure: String, Codable, CaseIterable, Sendable, Identifiable {
-    case quota, burnRate = "burn", tokens, cost
+    case quota, burnRate = "burn", tokens, consumed, cost
 
     public var id: Self { self }
 }
@@ -194,7 +194,8 @@ public struct PanelLayout: Hashable, Codable, Sendable {
         init?(json: JSONValue) {
             guard let fields = json.objectValue else { return nil }
             self.init(widget: fields["widget"]?.stringValue.flatMap(PanelWidget.init(rawValue:)),
-                      measures: PanelLayout.strings(fields["measures"]).compactMap(PanelMeasure.init(rawValue:)),
+                      measures: PanelLayout.strings(fields["measures"]).compactMap {
+                          PanelMeasure(rawValue: $0 == "tokenTotal" ? "consumed" : $0) },
                       hidden: fields["hidden"]?.boolValue ?? false,
                       hiddenRows: PanelLayout.strings(fields["hiddenRows"]),
                       rows: PanelLayout.strings(fields["rows"]),

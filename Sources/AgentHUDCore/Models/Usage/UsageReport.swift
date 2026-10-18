@@ -98,6 +98,8 @@ public struct UsageReport: Hashable, Codable, Sendable {
     public let codexResetCreditsObservedAt: Date?
     /// Where each session's tokens went, by session id. Optional so previously saved reports remain readable.
     public let sessionUsage: [String: SessionUsage]?
+    /// Each window's models' recent reply speed, from the ledger's call events (`ReportView.replyRate(for:)`).
+    public let replyRates: [String: QuotaReplyRate]?
     /// WorkBuddy's own metering of each session: credits, their attribution, and its context size; other sources meter
     /// nothing of their own.
     public let sessionCredits: [String: SessionCredits]?
@@ -135,13 +137,14 @@ public struct UsageReport: Hashable, Codable, Sendable {
         activeQuotaPoolIDs: [String: Set<String>]? = nil,
         accounts: [String: [AccountObservation]]? = nil,
         forgottenAccountProviders: Set<String>? = nil,
-        sessionUsage: [String: SessionUsage]? = nil,
+        sessionUsage: [String: SessionUsage]? = nil, replyRates: [String: QuotaReplyRate]? = nil,
         sessionCredits: [String: SessionCredits]? = nil,
         periods: UsagePeriods? = nil,
         recached: [UsageBucket]? = nil,
         rowSeenAt: [String: Date]? = nil
     ) {
         self.sessionUsage = sessionUsage
+        self.replyRates = replyRates
         self.sessionCredits = sessionCredits
         self.periods = periods
         self.recached = recached

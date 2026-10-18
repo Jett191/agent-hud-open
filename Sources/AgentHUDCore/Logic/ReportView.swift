@@ -254,6 +254,26 @@ public struct ReportView: Sendable {
         return QuotaMath.tokensPerHour(snapshot: snapshot, consumers: consumers, usage: report.usage, now: now)
     }
 
+    /// The amount this quota window's cycle has consumed, in the window's own unit: the source's own tally where it
+    /// reports one, else the tokens its consumers' buckets count over the observed part of the cycle. History before
+    /// the local ledger begins is not guessed at.
+    public func consumed(for agentId: String) -> QuotaConsumption? {
+        guard counts(agentId), let report, let snapshot = report.snapshot(for: agentId) else { return nil }
+        if let used = snapshot.used { return QuotaConsumption(used: used, capacity: snapshot.capacity) }
+        guard let consumers = report.consumerIdsByQuota[agentId],
+              let tokens = QuotaMath.tokensTotal(snapshot: snapshot, consumers: consumers, usage: report.usage, now: now)
+        else { return nil }
+        return QuotaConsumption(used: Int64(tokens), capacity: nil)
+    }
+
+    /// The recent reply speed of the models this window's consumers use: output tokens over the spans calls were
+    /// actually answering in (`CombinedUsageProvider` fills `replyRates` from the ledger's call events). Nil when no
+    /// calls answered recently or the provider does not record calls.
+    public func replyRate(for agentId: String) -> QuotaReplyRate? {
+        guard counts(agentId), let report else { return nil }
+        return report.replyRates?[agentId]
+    }
+
     /// What the window's reading and recent pace say about the rest of its cycle.
     public func outlook(for agentId: String) -> QuotaOutlook? {
         guard counts(agentId), let report, let snapshot = report.snapshot(for: agentId) else { return nil }
@@ -264,6 +284,37 @@ public struct ReportView: Sendable {
     public func forecastHint(for agentId: String) -> String? {
         guard counts(agentId), let report, let snapshot = report.snapshot(for: agentId) else { return nil }
         return QuotaForecast.hint(snapshot: snapshot, insights: report.insightsByAgent[agentId], now: now)
+    }
+
+    // MARK: API balances
+
+    /// The consumers an API balance bills, among the report's.
+    public func billingConsumers(_ billing: APIBilling) -> [AgentDescriptor] {
+        report?.consumers.filter { billing.contains($0) } ?? []
+    }
+
+    /// The recent reply speed of the models an API balance bills (`CombinedUsageProvider` fills `replyRates` under
+    /// the balance's block key). Nil when no calls answered recently or the provider does not record calls.
+    public func billingReplyRate(_ billing: APIBilling) -> QuotaReplyRate? {
+        report?.replyRates?[billing.panelBlockKey]
+    }
+
+    /// Tokens the balance's consumers spent over `interval`, from the usage buckets; nil when none are recorded.
+    public func billingTokens(_ billing: APIBilling, during interval: DateInterval) -> Int? {
+        guard let report else { return nil }
+        let ids = Set(billingConsumers(billing).map(\.id))
+        guard !ids.isEmpty else { return nil }
+        let tokens = report.usage.reduce(0) {
+            ids.contains($1.agentId) && $1.overlaps(interval) ? $0 + $1.total + $1.cacheReadTokens : $0
+        }
+        return tokens > 0 ? tokens : nil
+    }
+
+    /// Tokens per hour the balance's consumers spent over `interval`'s elapsed part.
+    public func billingTokensPerHour(_ billing: APIBilling, during interval: DateInterval) -> Double? {
+        guard let tokens = billingTokens(billing, during: interval) else { return nil }
+        let hours = max(interval.start.distance(to: min(interval.end, now)) / 3600, 1.0 / 60)
+        return Double(tokens) / hours
     }
 
     // MARK: Sessions

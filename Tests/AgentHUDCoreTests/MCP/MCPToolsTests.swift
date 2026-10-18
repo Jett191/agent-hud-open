@@ -107,7 +107,7 @@ final class MCPToolsTests: XCTestCase {
         XCTAssertEqual(schema["properties"]["countdown"]["type"], .string("boolean"))
         XCTAssertEqual(choices(block["properties"]["widget"]), ["bar", "ring", "number", "chart"])
         XCTAssertEqual(block["properties"]["measures"]["type"], .string("array"))
-        XCTAssertEqual(choices(block["properties"]["measures"]["items"]), ["quota", "burn", "tokens", "cost"])
+        XCTAssertEqual(choices(block["properties"]["measures"]["items"]), ["quota", "burn", "tokens", "consumed", "cost"])
         XCTAssertEqual(block["properties"]["hidden"]["type"], .string("boolean"))
         XCTAssertEqual(block["properties"]["hiddenRows"]["items"], .object(["type": .string("string")]))
         XCTAssertEqual(block["properties"]["countdown"]["type"], .string("boolean"))

@@ -271,7 +271,8 @@ actor OpenAgentUsageProvider: UsageProvider, LedgerRecording {
             }
             for window in quota.windows {
                 let snapshot = UsageSnapshot(agentId: window.id, remainingPct: window.remaining, resetAt: window.reset,
-                                             windowDuration: window.duration, updatedAt: result.at)
+                                             windowDuration: window.duration, updatedAt: result.at,
+                                             used: window.used, capacity: window.capacity)
                 snapshots.append(snapshot)
                 descriptors.append(.init(id: window.id, vendor: shownUnder,
                     model: window.label, shortModel: window.shortLabel ?? window.label,

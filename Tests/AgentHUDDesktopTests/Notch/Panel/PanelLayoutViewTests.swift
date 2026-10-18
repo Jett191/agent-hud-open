@@ -226,7 +226,9 @@ final class PanelLayoutViewTests: XCTestCase {
         XCTAssertTrue(row.assessment.showsLevel)
         func tall(_ measure: PanelMeasure, burning rate: Double, cost: QuotaListCost? = nil) -> CGFloat {
             let view = ModelUsageRow(row: row, now: store.now, metric: measure, showReset: true, showVendor: false,
-                                     insights: insights(burning: rate), outlook: nil, tokensPerHour: 1000, cost: cost)
+                                     insights: insights(burning: rate), outlook: nil, tokensPerHour: 1000,
+                                     replyRate: .init(tokensPerSecond: 123.4, calls: 24, tokensOut: 3000),
+                                     consumed: .init(used: 3_000_000, capacity: 10_000_000), cost: cost)
             return NSHostingView(rootView: view.frame(width: 504)).fittingSize.height
         }
         let fast = QuotaRowMetrics(row: row, insights: insights(burning: 120), outlook: nil, now: store.now, tokensPerHour: 1000)
@@ -235,6 +237,8 @@ final class PanelLayoutViewTests: XCTestCase {
         XCTAssertEqual(tall(.burnRate, burning: 12), quota, accuracy: 0.5)
         XCTAssertEqual(tall(.burnRate, burning: 120), quota, accuracy: 0.5, "100.0%/h and up is wider than the value's 62 pt")
         XCTAssertEqual(tall(.burnRate, burning: 1234.5), quota, accuracy: 0.5)
+        XCTAssertEqual(tall(.tokens, burning: 12), quota, accuracy: 0.5)
+        XCTAssertEqual(tall(.consumed, burning: 12), quota, accuracy: 0.5)
         XCTAssertEqual(tall(.cost, burning: 12, cost: QuotaListCost(amounts: ["USD": 123_456], hours: 100)), quota, accuracy: 0.5)
     }
 
@@ -243,14 +247,17 @@ final class PanelLayoutViewTests: XCTestCase {
     func testARingCellSaysTheShareItShowsInEveryMeasure() throws {
         let row = try XCTUnwrap(store.rows.first { $0.agent.windowKey == "claude-session" })
         let share = try XCTUnwrap(row.usedPct.map(TokenFormat.percent))
-        let metrics = QuotaRowMetrics(row: row, insights: insights(burning: 1.4), outlook: nil, now: store.now, tokensPerHour: 1000)
+        let metrics = QuotaRowMetrics(row: row, insights: insights(burning: 1.4), outlook: nil, now: store.now, tokensPerHour: 1000,
+                                      replyRate: .init(tokensPerSecond: 7.5, calls: 4, tokensOut: 150), consumed: .init(used: 3000))
         func spoken(_ style: QuotaCell.Style, _ measure: PanelMeasure) -> String {
             QuotaCell(row: row, metrics: metrics, metric: measure, style: style, showReset: false).spokenValue
         }
         XCTAssertEqual(spoken(.ring, .quota), share, "once, not twice")
         XCTAssertEqual(spoken(.ring, .burnRate), "\(share), 1.4%/h, —")
-        XCTAssertEqual(spoken(.ring, .tokens), "\(share), 1.0k/h, 24k / day")
-        XCTAssertEqual(spoken(.number, .tokens), "1.0k/h, 24k / day")
+        XCTAssertEqual(spoken(.ring, .tokens), "\(share), 7.5/s, 4 replies")
+        XCTAssertEqual(spoken(.number, .tokens), "7.5/s, 4 replies")
+        XCTAssertEqual(spoken(.ring, .consumed), "\(share), 3.0k, 1.0k/h")
+        XCTAssertEqual(spoken(.number, .consumed), "3.0k, 1.0k/h")
         XCTAssertEqual(spoken(.number, .quota), share)
         for measure in PanelMeasure.allCases {
             XCTAssertTrue(spoken(.ring, measure).hasPrefix(share), "\(measure)")

@@ -98,6 +98,8 @@ final class QuotaCellLayoutTests: XCTestCase {
         let store = sample(L10n.resolved == .zhHans ? .zhHans : .en), view = store.view
         let made = QuotaRowMetrics(row: row, insights: store.report?.insightsByAgent[row.id], outlook: view.outlook(for: row.id),
                                    now: store.now, tokensPerHour: store.quotaTokensPerHour(for: row.id),
+                                   replyRate: measure == .tokens ? .init(tokensPerSecond: 123.4, calls: 24, tokensOut: 3000) : nil,
+                                   consumed: measure == .consumed ? view.consumed(for: row.id) : nil,
                                    cost: measure == .cost ? view.listCost(for: row.id) : nil)
         readings[key] = made
         return made
@@ -192,6 +194,8 @@ final class QuotaCellLayoutTests: XCTestCase {
                     QuotaCell(row: row, metrics: QuotaRowMetrics(
                         row: row, insights: store.report?.insightsByAgent[row.id], outlook: view.outlook(for: row.id),
                         now: store.now, tokensPerHour: store.quotaTokensPerHour(for: row.id),
+                        replyRate: measure == .tokens ? .init(tokensPerSecond: 123.4, calls: 24, tokensOut: 3000) : nil,
+                        consumed: measure == .consumed ? view.consumed(for: row.id) : nil,
                         cost: measure == .cost ? view.listCost(for: row.id) : nil),
                               metric: measure, style: each.style, showReset: each.showReset, ringSize: each.size)
                 }

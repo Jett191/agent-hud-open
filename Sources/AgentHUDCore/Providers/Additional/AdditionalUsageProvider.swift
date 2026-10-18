@@ -216,7 +216,7 @@ actor AdditionalUsageProvider: UsageProvider, LedgerRecording {
         }
         let snapshots = windows.map {
             UsageSnapshot(agentId: $0.id, remainingPct: $0.remaining, resetAt: $0.reset, windowDuration: $0.duration,
-                          updatedAt: $0.observedAt ?? observedAt)
+                          updatedAt: $0.observedAt ?? observedAt, used: $0.used, capacity: $0.capacity)
         }
         var insights: [String: UsageInsights] = [:]
         for snapshot in snapshots {
