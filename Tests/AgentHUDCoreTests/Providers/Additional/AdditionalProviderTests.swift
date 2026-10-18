@@ -244,6 +244,51 @@ final class AdditionalProviderTests: XCTestCase, @unchecked Sendable {
         var values: [URLRequest] = []
         func record(_ value: URLRequest) { values.append(value) }
     }
+
+    func testCursorCachesDailyBotSpendForTheProviderAndLedger() async throws {
+        let now = now
+        let client = CursorClient(database: try authDB(), http: ProviderHTTP(send: { request in
+            switch request.url?.lastPathComponent {
+            case "get-filtered-usage-events":
+                return Data(#"{"usageEventsDisplay":[],"totalUsageEventsCount":0}"#.utf8)
+            case "GetMe":
+                return Data(#"{"userId":"fixture-user"}"#.utf8)
+            case "GetDailySpendByCategory":
+                return Data(#"{"dailySpend":[{"day":"1788800000000","category":"native-agent","totalTokens":"11"}]}"#.utf8)
+            default:
+                XCTFail("Unexpected request: \(request.url?.lastPathComponent ?? "nil")")
+                throw ProviderFailure.format
+            }
+        }))
+        let ledger = UsageLedger.inMemory()
+        let provider = AdditionalUsageProvider(source: .cursor, readQuota: { .init() }, readSessions: { _ in
+            await client.savedSessions
+        }, history: QuotaHistoryStore(), clock: { now }, refreshSessions: { _ in
+            _ = await client.sessions(since: now.addingTimeInterval(-86400))
+        }, ledger: ledger)
+        let report = try await provider.fetchAccountAndLocalUsage(agents: [], historyHours: 168)
+        let saved = await client.savedSessions
+        XCTAssertEqual(saved.sessions.map { $0.events.reduce(0) { $0 + $1.input } }, [11])
+        XCTAssertEqual(saved.revision, 1)
+        XCTAssertEqual(report.sessions.map(\.tokensIn), [11], "the provider must read the enriched cache")
+        let usage = try await ledger.buckets(since: .distantPast, source: AdditionalSource.cursor.rawValue)
+        XCTAssertEqual(usage.reduce(0) { $0 + $1.tokensIn }, 11)
+    }
+
+    func testCursorDailySpendFailureKeepsRequestLevelEvents() async throws {
+        let client = CursorClient(database: try authDB(), http: ProviderHTTP(send: { request in
+            if request.url?.lastPathComponent == "get-filtered-usage-events" {
+                return Data(#"{"usageEventsDisplay":[{"timestamp":"1788800000000","conversationId":"conversation","model":"model","tokenUsage":{"inputTokens":10,"outputTokens":5}}],"totalUsageEventsCount":1}"#.utf8)
+            }
+            throw ProviderHTTPError(status: 503)
+        }))
+        let read = await client.sessions(since: now.addingTimeInterval(-86400))
+        let saved = await client.savedSessions
+        XCTAssertNil(read.notice)
+        XCTAssertEqual(read.sessions.first?.events.first?.input, 10)
+        XCTAssertEqual(saved.sessions.first?.events.first?.input, 10)
+    }
+
     /// Every account step asks the dashboard, since the collector decides how often; a failure keeps its notice.
     func testCursorKeepsADashboardFailureNotice() async throws {
         let requests = Requests()

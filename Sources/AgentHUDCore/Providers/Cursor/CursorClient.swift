@@ -120,7 +120,12 @@ actor CursorClient {
         if cached?.account != auth.account { cached = nil }
         do {
             let events = try await fetchEvents(auth: auth, since: start, until: now)
-            let result = named(try Self.parseEvents(events, account: auth.account), account: auth.account)
+            var result = try Self.parseEvents(events, account: auth.account)
+            // Keep the enriched sessions in the same cache the provider reads; a spend failure leaves billing intact.
+            if let spend = try? await GrokBotSpend.dailySpend(auth: auth, since: start, until: now, http: http) {
+                result = GrokBotSpend.merged(spend, account: auth.account, into: result)
+            }
+            result = named(result, account: auth.account)
             cached = (now, auth.account, start, result)
             fetches += 1
             return result
