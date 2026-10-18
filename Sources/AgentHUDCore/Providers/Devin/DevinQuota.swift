@@ -20,13 +20,17 @@ enum DevinQuota {
     /// The quota of the newest cache file that parses, tried newest first. No file means the client never
     /// reported its status; files that do not parse mean the answer's shape changed.
     static func quota(in directory: URL, now: Date) throws -> ProviderQuota {
-        let candidates = ((try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
-            .filter { $0.lastPathComponent.hasPrefix("user_status.") && $0.lastPathComponent.hasSuffix(".bin") }
-            .map { url in
-                (url, (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
-            }
-            .sorted { lhs, rhs in lhs.1 != rhs.1 ? lhs.1 > rhs.1 : lhs.0.lastPathComponent > rhs.0.lastPathComponent }
+        let files: [URL] = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        var candidates: [(url: URL, modified: Date)] = []
+        for url in files where url.lastPathComponent.hasPrefix("user_status.") && url.lastPathComponent.hasSuffix(".bin") {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            candidates.append((url, modified))
+        }
+        candidates.sort { lhs, rhs in
+            if lhs.modified != rhs.modified { return lhs.modified > rhs.modified }
+            return lhs.url.lastPathComponent > rhs.url.lastPathComponent
+        }
         guard !candidates.isEmpty else { return ProviderQuota(client: "Devin CLI", signedOut: true) }
         for (url, _) in candidates {
             try Task.checkCancellation()
