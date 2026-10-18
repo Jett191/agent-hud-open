@@ -166,7 +166,7 @@ struct QuotaCell: View {
         switch metric {
         case .quota: return levelText
         case .burnRate: return metrics.runsOut ? theme.statusText(.warning) : theme.statusText(.ok)
-        case .tokens, .cost: return theme.statusText(.ok)
+        case .tokens, .consumed, .cost: return theme.statusText(.ok)
         }
     }
 

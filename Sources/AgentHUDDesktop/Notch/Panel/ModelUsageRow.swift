@@ -11,7 +11,9 @@ struct ModelUsageRow: View {
     var insights: UsageInsights?
     var outlook: QuotaOutlook?
     var tokensPerHour: Double?
+    var replyRate: QuotaReplyRate?
     var forecastHint: String?
+    var consumed: QuotaConsumption?
     var cost: QuotaListCost?
     var isLoading = false
     @State private var isHovered = false
@@ -39,7 +41,7 @@ struct ModelUsageRow: View {
         let metricLevel: StatusLevel = switch metric {
         case .quota: level
         case .burnRate: runsOut ? .warning : .ok
-        case .tokens, .cost: .ok
+        case .tokens, .consumed, .cost: .ok
         }
         // The marker is filled with the level's colour; the value is text, in the level's text colour.
         let valueColor = row.level == nil ? theme.secondary : theme.statusText(metricLevel)
@@ -92,7 +94,8 @@ struct ModelUsageRow: View {
     }
 
     private var metrics: QuotaRowMetrics {
-        QuotaRowMetrics(row: row, insights: insights, outlook: outlook, now: now, tokensPerHour: tokensPerHour, cost: cost)
+        QuotaRowMetrics(row: row, insights: insights, outlook: outlook, now: now, tokensPerHour: tokensPerHour,
+                        replyRate: replyRate, consumed: consumed, cost: cost)
     }
 
     private var metricValue: String? { metrics.value(metric) }
@@ -136,15 +139,19 @@ struct QuotaRowMetrics {
     let outlook: QuotaOutlook?
     let now: Date
     let tokensPerHour: Double?
+    let replyRate: QuotaReplyRate?
+    let consumed: QuotaConsumption?
     let cost: QuotaListCost?
 
     init(row: AgentRow, insights: UsageInsights?, outlook: QuotaOutlook?, now: Date, tokensPerHour: Double?,
-         cost: QuotaListCost? = nil) {
+         replyRate: QuotaReplyRate? = nil, consumed: QuotaConsumption? = nil, cost: QuotaListCost? = nil) {
         self.row = row
         self.insights = row.assessment.showsLevel ? insights : nil
         self.outlook = row.assessment.showsLevel ? outlook : nil
         self.now = now
         self.tokensPerHour = row.assessment.showsLevel ? tokensPerHour : nil
+        self.replyRate = row.assessment.showsLevel ? replyRate : nil
+        self.consumed = row.assessment.showsLevel ? consumed : nil
         self.cost = row.assessment.showsLevel ? cost : nil
     }
 
@@ -155,7 +162,10 @@ struct QuotaRowMetrics {
         case .burnRate:
             insights?.burnRatePctPerHour.map { String(format: "%.1f%%/h", $0) }
         case .tokens:
-            tokensPerHour.map { TokenFormat.short(Int($0.rounded())) + "/h" }
+            replyRate.map { $0.tokensPerSecond < 10 ? String(format: "%.1f/s", $0.tokensPerSecond)
+                                                    : "\(Int($0.tokensPerSecond))/s" }
+        case .consumed:
+            consumed.map { TokenFormat.short(Int($0.used)) }
         case .cost:
             // The first currency in code order; a second one, which is rare, is the detail.
             cost.flatMap { cost in cost.currencies.first.map { MoneyFormat.short(cost.amounts[$0] ?? 0, currency: $0) } }
@@ -167,7 +177,7 @@ struct QuotaRowMetrics {
     /// already: a share used, and tokens per hour, at most three figures and a unit.
     func shortValue(_ metric: PanelMeasure) -> String? {
         switch metric {
-        case .quota, .tokens:
+        case .quota, .tokens, .consumed:
             return nil
         case .burnRate:
             return insights?.burnRatePctPerHour.map { String(format: "%.0f%%/h", $0) }
@@ -197,7 +207,11 @@ struct QuotaRowMetrics {
             if let sampling = QuotaForecast.sampling(outlook: outlook, insights: insights) { return sampling.label }
             return QuotaForecast.text(of: outlook, projectedUsedAtReset: projectedAtReset) ?? "—"
         case .tokens:
-            return tokensPerHour.map { TokenFormat.short(Int(($0 * 24).rounded())) + L10n.text(" / 天", " / day") } ?? "—"
+            return replyRate.map { L10n.text("\($0.calls) 次回复", "\($0.calls) replies") } ?? "—"
+        case .consumed:
+            // With a reported capacity the line reads "used / cap"; without one it carries the pace instead.
+            if let capacity = consumed?.capacity { return "/ " + TokenFormat.short(Int(capacity)) }
+            return tokensPerHour.map { TokenFormat.short(Int($0.rounded())) + "/h" } ?? "—"
         case .cost:
             guard let cost, let first = cost.currencies.first else { return "—" }
             let others = cost.currencies.dropFirst().map { MoneyFormat.short(cost.amounts[$0] ?? 0, currency: $0) }
@@ -218,7 +232,7 @@ struct QuotaRowMetrics {
 
     var exhaustionTimeLabel: String? {
         guard let date = exhaustsBeforeReset else { return nil }
-        if date.timeIntervalSince(now) < 7 * 86400 { return ChartData.weekdayTime(date) }
+        if date.timeIntervalSince(now) < 7 * 86400 { return ChartData.relativeWeekdayTime(date, now: now) }
         return date.formatted(Date.FormatStyle().month(.abbreviated).day()
             .hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)
             .locale(L10n.dateLocale))

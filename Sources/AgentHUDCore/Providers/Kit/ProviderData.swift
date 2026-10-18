@@ -68,6 +68,10 @@ struct ProviderQuota: Sendable {
         let remaining: Double?
         var reset: Date? = nil
         var duration: TimeInterval? = nil
+        /// The amount consumed this cycle in the window's own unit (tokens, credits, minutes), when the source reports
+        /// it; `capacity` is the cycle's size.
+        var used: Int64? = nil
+        var capacity: Int64? = nil
         /// The window's short name (`WindowNames`); nil shows its full name.
         var shortLabel: String? = nil
         /// False for a window scoped to a subset of the plan's models or features (`AgentDescriptor.allModels`).

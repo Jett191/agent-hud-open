@@ -211,6 +211,9 @@ public final class UsageStore {
     /// `view.tokensPerHour(for:)`.
     public func quotaTokensPerHour(for agentId: String) -> Double? { view.tokensPerHour(for: agentId) }
 
+    /// `view.replyRate(for:)`.
+    public func quotaReplyRate(for agentId: String) -> QuotaReplyRate? { view.replyRate(for: agentId) }
+
     /// `view.billing`.
     public var enabledBilling: [APIBilling] { view.billing }
 

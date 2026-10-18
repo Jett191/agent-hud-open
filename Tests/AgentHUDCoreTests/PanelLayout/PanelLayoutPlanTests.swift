@@ -17,9 +17,9 @@ final class PanelLayoutPlanTests: XCTestCase {
         plan(layout).blocks.first { $0.key == key }
     }
 
-    private let everyMeasure: [PanelMeasure] = [.quota, .burnRate, .tokens, .cost]
-    /// What a balance's number offers: money, and no tokens.
-    private let ofABalance: [PanelMeasure] = [.quota, .burnRate, .cost]
+    private let everyMeasure: [PanelMeasure] = [.quota, .burnRate, .tokens, .consumed, .cost]
+    /// A balance's number includes its models' reply speed and recorded consumption.
+    private let ofABalance: [PanelMeasure] = [.quota, .burnRate, .tokens, .consumed, .cost]
 
     func testTheDefaultLayoutIsTheDefaultView() {
         let planned = plan(PanelLayout())
@@ -109,6 +109,7 @@ final class PanelLayoutPlanTests: XCTestCase {
         expect("Claude", PanelLayout.Block(measures: [.tokens, .cost, .tokens, .quota, .cost]), offers: [.tokens, .cost, .quota])
         expect("Claude", PanelLayout.Block(measures: []), offers: everyMeasure)
         expect("Claude", PanelLayout.Block(widget: .number, measures: Array(everyMeasure.reversed())), offers: Array(everyMeasure.reversed()))
+        expect("api:DeepSeek", PanelLayout.Block(measures: [.consumed, .tokens, .consumed]), offers: [.consumed, .tokens])
     }
 
     func testAMeasureTheWidgetDoesNotOfferIsLeftOutAndNoneLeftIsEveryOne() {
@@ -121,13 +122,14 @@ final class PanelLayoutPlanTests: XCTestCase {
         expect("Claude", PanelLayout.Block(widget: .chart, measures: [.quota, .tokens]), offers: ofAChart)
         expect("Claude", PanelLayout.Block(widget: .chart, measures: [.burnRate, .quota]), offers: ofAChart)
         expect("api:DeepSeek", PanelLayout.Block(measures: [.cost]), offers: [.cost])
-        // A balance has no tokens of its own.
-        expect("api:DeepSeek", PanelLayout.Block(measures: [.cost, .tokens, .quota]), offers: [.cost, .quota])
-        expect("api:DeepSeek", PanelLayout.Block(measures: [.tokens]), offers: ofABalance)
+        expect("api:DeepSeek", PanelLayout.Block(measures: [.cost, .tokens, .quota]), offers: [.cost, .tokens, .quota])
+        expect("api:DeepSeek", PanelLayout.Block(measures: [.tokens]), offers: [.tokens])
+        expect("api:DeepSeek", PanelLayout.Block(measures: [.consumed]), offers: [.consumed])
         expect("api:DeepSeek", PanelLayout.Block(widget: .chart, measures: [.tokens]), offers: [.cost])
+        expect("api:DeepSeek", PanelLayout.Block(widget: .chart, measures: [.consumed]), offers: [.cost])
         expect("api:DeepSeek", PanelLayout.Block(widget: .chart, measures: [.quota, .burnRate]), offers: [.cost])
         // The widget falls back first, and the measures are weighed under the widget that results.
-        expect("api:DeepSeek", PanelLayout.Block(widget: .ring, measures: [.tokens, .burnRate]), offers: [.burnRate])
+        expect("api:DeepSeek", PanelLayout.Block(widget: .ring, measures: [.tokens, .burnRate]), offers: [.tokens, .burnRate])
         expect("Claude", PanelLayout.Block(widget: .chart, measures: [.burnRate]), offers: ofAChart)
     }
 

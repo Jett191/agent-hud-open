@@ -25,8 +25,8 @@ final class HUDToolsTests: HUDToolsCase {
         XCTAssertEqual(claude["shown"], .bool(true))
         XCTAssertEqual(claude["widget"], .string("bar"))
         XCTAssertEqual(claude["widgets"], .array(["bar", "ring", "number", "chart"].map(JSONValue.string)))
-        XCTAssertEqual(claude["measures"], .array(["quota", "burn", "tokens", "cost"].map(JSONValue.string)))
-        XCTAssertEqual(claude["offeredMeasures"], .array(["quota", "burn", "tokens", "cost"].map(JSONValue.string)))
+        XCTAssertEqual(claude["measures"], .array(["quota", "burn", "tokens", "consumed", "cost"].map(JSONValue.string)))
+        XCTAssertEqual(claude["offeredMeasures"], .array(["quota", "burn", "tokens", "consumed", "cost"].map(JSONValue.string)))
         XCTAssertEqual(claude["countdown"], .bool(true))
         XCTAssertNil(claude["measure"], "the measure shown first is the first of measures")
         XCTAssertNil(claude["columns"], "bars have no cells")
@@ -44,8 +44,8 @@ final class HUDToolsTests: HUDToolsCase {
         let deepseek = try block("api:DeepSeek", in: panel)
         XCTAssertEqual(deepseek["kind"], .string("billing"))
         XCTAssertEqual(deepseek["widgets"], .array([.string("number"), .string("chart")]))
-        XCTAssertEqual(deepseek["measures"], .array(["quota", "burn", "cost"].map(JSONValue.string)))
-        XCTAssertEqual(deepseek["offeredMeasures"], .array(["quota", "burn", "cost"].map(JSONValue.string)))
+        XCTAssertEqual(deepseek["measures"], .array(["quota", "burn", "tokens", "consumed", "cost"].map(JSONValue.string)))
+        XCTAssertEqual(deepseek["offeredMeasures"], .array(["quota", "burn", "tokens", "consumed", "cost"].map(JSONValue.string)))
         for property in ["countdown", "columns", "ringSize"] {
             XCTAssertNil(deepseek[property], "a balance has no \(property) to set")
         }
@@ -165,7 +165,7 @@ final class HUDToolsTests: HUDToolsCase {
         let claude = try block("Claude", in: panel)
         XCTAssertEqual(claude["widget"], .string("ring"))
         XCTAssertEqual(claude["measures"], .array([.string("burn"), .string("quota")]))
-        XCTAssertEqual(claude["offeredMeasures"], .array(["quota", "burn", "tokens", "cost"].map(JSONValue.string)))
+        XCTAssertEqual(claude["offeredMeasures"], .array(["quota", "burn", "tokens", "consumed", "cost"].map(JSONValue.string)))
         XCTAssertEqual(claude["columns"], .integer(4))
         XCTAssertEqual(claude["ringSize"], .string("medium"))
         let fable = try XCTUnwrap(claude["rows"]?.arrayValue?.compactMap(\.objectValue).first { $0["key"] == .string("claude-weekly-fable") })
@@ -189,7 +189,7 @@ final class HUDToolsTests: HUDToolsCase {
         let everyKey = JSONValue.array(["Claude", "Codex", "api:DeepSeek"].map(JSONValue.string))
         let spelled = try result(MCPTools.draftHUD, [
             "order": everyKey,
-            "blocks": .object(["Claude": .object(["widget": .string("bar"), "measures": .array(["quota", "burn", "tokens", "cost"].map(JSONValue.string)),
+            "blocks": .object(["Claude": .object(["widget": .string("bar"), "measures": .array(["quota", "burn", "tokens", "consumed", "cost"].map(JSONValue.string)),
                                                   "hidden": .bool(false)]),
                                "api:DeepSeek": .object(["widget": .string("number")])]),
             "style": .object(["spacing": .string("regular"), "separators": .bool(true)]),
@@ -323,7 +323,7 @@ final class HUDToolsTests: HUDToolsCase {
                                                                      "hide": .bool(true), "hidden": .string("yes"), "measure": .string("burn")])]),
                                  "sections": .array([.string("weather")]), "order": .string("Codex")])
         for part in ["blocks.Claude.widget is one of \"bar\", \"ring\", \"number\", \"chart\"",
-                     "blocks.Claude.measures[0]: \"speed\" is not one of \"quota\", \"burn\", \"tokens\", \"cost\"",
+                     "blocks.Claude.measures[0]: \"speed\" is not one of \"quota\", \"burn\", \"tokens\", \"consumed\", \"cost\"",
                      "blocks.Claude.measures[1] is a string", "blocks.Claude has no property \"hide\"",
                      "blocks.Claude has no property \"measure\"; a block takes widget, measures, hidden, hiddenRows, rows, accounts, countdown, columns, ringSize, span and period.",
                      "blocks.Claude.hidden is true or false", "sections[0]: \"weather\" is not one of", "order is a list"] {
@@ -338,7 +338,7 @@ final class HUDToolsTests: HUDToolsCase {
         }
         // Both kinds in one answer: a name that would be forgiven, and what the rest asks that the panel cannot do.
         let both = try refusal(["blocks": .object(["Claude": .object(["widget": .string("gauge")]),
-                                                   "api:DeepSeek": .object(["measures": .array([.string("tokens")])])]),
+                                                   "api:DeepSeek": .object(["widget": .string("chart"), "measures": .array([.string("consumed")])])]),
                                 "order": .array([.string("Zed")])])
         for part in ["blocks.Claude.widget is one of", "blocks.api:DeepSeek.measures[0]:", "order[0]: No block has the key \"Zed\""] {
             XCTAssertTrue(both.contains(part), "\(part) — \(both)")

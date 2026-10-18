@@ -27,7 +27,7 @@ public enum Countdown {
         guard let date else { return "—" }
         let interval = date.timeIntervalSince(now)
         if interval < 24 * 3600 { return format(interval) }
-        return ChartData.weekdayTime(date, calendar: calendar)
+        return ChartData.relativeWeekdayTime(date, now: now, calendar: calendar)
     }
 
     /// Menu variant: "3h10m" or "周日 02:00".
@@ -35,7 +35,7 @@ public enum Countdown {
         guard let date else { return "—" }
         let interval = date.timeIntervalSince(now)
         if interval < 24 * 3600 { return compact(interval) }
-        return ChartData.weekdayTime(date, calendar: calendar)
+        return ChartData.relativeWeekdayTime(date, now: now, calendar: calendar)
     }
 
     /// A forecast's duration in the interface's words, in whole minutes rounded up: "2小时14分" / "2h 14m", and "2小时" /

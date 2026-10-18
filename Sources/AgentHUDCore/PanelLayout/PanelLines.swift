@@ -28,10 +28,15 @@ public enum PanelLines {
     /// gives way there rather than being cut, so a half block sets no more cells on a line than leave each this wide.
     public static let narrowestCell = cellWidth(in: narrowestContent, columns: PanelLayout.Block.columnRange.upperBound)
 
+    /// The room the metric buttons share in a half block's heading. Five measures use narrower buttons to keep the
+    /// same space as the original four, without taking room from the agent's name.
+    public static let metricPickerWidth = 86.0
+
     /// The room a block's heading takes in half a line with the longest name the app gives an agent, GitHub Copilot's,
     /// 96 pt in the heading's type: the logo, 20 pt, the name, the least room before the picker, 8 pt, and a picker of
-    /// four measures, 88 pt, 6 pt apart, so 230 pt. A longer name the app does not know wraps rather than being cut.
-    public static let widestHeading = 20.0 + 6 + 96 + 6 + 8 + 6 + 88
+    /// at most `metricPickerWidth` plus 2 pt of trailing room, 6 pt apart, so 230 pt. A longer name the app does not
+    /// know wraps rather than being cut.
+    public static let widestHeading = 20.0 + 6 + 96 + 6 + 8 + 6 + metricPickerWidth + 2
 
     /// The narrowest half a block is drawn in, 230 pt: room for the widest heading, and for two cells as wide as the
     /// whole panel's default four at its narrowest, 480 pt, which are 102 pt each, 224 pt with their insets. A half of

@@ -194,6 +194,39 @@ final class ChartDataTests: XCTestCase {
                        "10月11日 周日 23:00 – 23:15")
     }
 
+    func testRelativeWeekdaysNameTheirWeekAndUseConcreteDatesFurtherOut() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.firstWeekday = 2
+        func date(_ month: Int, _ day: Int) -> Date {
+            calendar.date(from: DateComponents(year: 2026, month: month, day: day, hour: 16, minute: 10))!
+        }
+        let now = date(10, 12) // Monday
+        let dates = [date(10, 13), date(10, 20), date(10, 27), date(11, 3), date(11, 10)]
+        XCTAssertEqual(dates.map { ChartData.relativeWeekdayTime($0, now: now, calendar: calendar) },
+            ["周二 16:10", "下周二 16:10", "下下周二 16:10", "下下下周二 16:10", ChartData.dateTime(dates[4], calendar: calendar)])
+        L10n.setLanguage(.en)
+        XCTAssertEqual(dates.map { ChartData.relativeWeekdayTime($0, now: now, calendar: calendar) },
+            ["Tue 16:10", "Next Tue 16:10", "Tue 27 Oct at 16:10", "Tue 3 Nov at 16:10", "Tue 10 Nov at 16:10"])
+    }
+
+    func testRelativeWeekdaysUseMondayForChineseAndTheCalendarsWeekStartForEnglish() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.firstWeekday = 1 // Sunday-start calendar, as in the US.
+        func date(_ day: Int) -> Date {
+            calendar.date(from: DateComponents(year: 2026, month: 10, day: day, hour: 16, minute: 10))!
+        }
+        let saturday = date(17), sunday = date(18), monday = date(19)
+        XCTAssertEqual(ChartData.relativeWeekdayTime(sunday, now: saturday, calendar: calendar), "周日 16:10")
+        XCTAssertEqual(ChartData.relativeWeekdayTime(monday, now: sunday, calendar: calendar), "下周一 16:10")
+        L10n.setLanguage(.en)
+        XCTAssertEqual(ChartData.relativeWeekdayTime(sunday, now: saturday, calendar: calendar), "Next Sun 16:10")
+        calendar.firstWeekday = 2 // Monday-start calendar, as in the UK.
+        XCTAssertEqual(ChartData.relativeWeekdayTime(sunday, now: saturday, calendar: calendar), "Sun 16:10")
+        XCTAssertEqual(ChartData.relativeWeekdayTime(monday, now: sunday, calendar: calendar), "Next Mon 16:10")
+    }
+
     func testConcreteDatesDistinguishMonthBoundariesAndFollowTheDateLocale() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!

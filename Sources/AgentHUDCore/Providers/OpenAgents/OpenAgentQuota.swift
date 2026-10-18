@@ -41,12 +41,15 @@ struct OpenAgentQuotaClient: Sendable {
         /// A window's full name is its period in the vendor's own words and then its plan; the pool it belongs to is the
         /// account's label, not the window's. Its short name is its period.
         func add(_ key: String, _ name: (full: String, short: String), _ used: Double, reset: Date?, duration: Double?,
-                 allModels: Bool = true) throws {
+                 allModels: Bool = true, usedCount: Int64? = nil, capacityCount: Int64? = nil) throws {
             guard used.isFinite, used >= 0 else { throw ProviderFailure.format }
             let plan = quota.plan.flatMap { $0.isEmpty ? nil : " · " + $0 } ?? ""
-            quota.windows.append(.init(id: credential.pool.windowID(key), label: name.full + plan,
+            var window = ProviderQuota.Window(id: credential.pool.windowID(key), label: name.full + plan,
                 remaining: QuotaMath.remaining(usedPercent: used), reset: reset, duration: duration, shortLabel: name.short,
-                allModels: allModels))
+                allModels: allModels)
+            window.used = usedCount
+            window.capacity = capacityCount
+            quota.windows.append(window)
         }
         switch credential.service {
         case .kimi, .kimiGlobal:
@@ -100,8 +103,10 @@ struct OpenAgentQuotaClient: Sendable {
         case .glmChina, .glmGlobal:
             guard root["success"].boolValue == true, root["code"].numberValue == 200,
                   let limits = root["data"]["limits"].arrayValue else { throw ProviderFailure.format }
-            quota.plan = root["data"]["planName"].stringValue
-            var windows: [(key: String, type: String, name: (full: String, short: String), used: Double, reset: Date?, duration: Double?)] = []
+            // Plans that bill in credits name their tier `level` where token plans say `planName`.
+            quota.plan = root["data"]["planName"].stringValue ?? root["data"]["level"].stringValue
+            var windows: [(key: String, type: String, name: (full: String, short: String), used: Double, reset: Date?, duration: Double?,
+                           usedCount: Int64?, capacity: Int64?)] = []
             for raw in limits {
                 guard let type = raw["type"].stringValue, ["TOKENS_LIMIT", "CREDIT_LIMIT", "TIME_LIMIT"].contains(type) else { continue }
                 guard let unit = raw["unit"].countValue, let count = raw["number"].countValue,
@@ -118,8 +123,11 @@ struct OpenAgentQuotaClient: Sendable {
                 if type != "TIME_LIMIT", duration == 18000, let date = reset, date > now.addingTimeInterval(18060) { reset = nil }
                 // The MCP window of older plans counts by the month.
                 let monthly = type == "TIME_LIMIT" && unit == 5 && count == 1
+                // The service's own cycle tallies in the window's unit: `currentValue` consumed of `usage`.
+                let usedCount = numeric(raw["currentValue"]).map { Int64(max(0, $0.rounded())) }
+                let capacity = numeric(raw["usage"]).map { Int64(max(0, $0.rounded())) }
                 windows.append(("\(type):\(unit):\(count)", type, glmName(type, period: WindowNames.Period(seconds: duration), monthly: monthly),
-                                percent, reset, monthly ? nil : duration))
+                                percent, reset, monthly ? nil : duration, usedCount, capacity))
             }
             // Token limits and credits of the same length, which an account does not normally have both of, are told
             // apart by their unit.
@@ -131,7 +139,8 @@ struct OpenAgentQuotaClient: Sendable {
                     name.short = (window.type == "CREDIT_LIMIT" ? "Credits " : "Tokens ") + period.afterWord
                 }
                 // The MCP window limits tool calls, not the plan's models.
-                try add(window.key, name, window.used, reset: window.reset, duration: window.duration, allModels: window.type != "TIME_LIMIT")
+                try add(window.key, name, window.used, reset: window.reset, duration: window.duration, allModels: window.type != "TIME_LIMIT",
+                        usedCount: window.usedCount, capacityCount: window.capacity)
             }
         }
         guard !quota.windows.isEmpty, Set(quota.windows.map(\.id)).count == quota.windows.count else { throw ProviderFailure.format }

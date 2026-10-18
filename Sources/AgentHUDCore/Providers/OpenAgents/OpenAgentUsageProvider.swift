@@ -172,17 +172,38 @@ actor OpenAgentUsageProvider: UsageProvider, LedgerRecording {
             local.sessions[index].turns = local.sessions[index].turns.map { SessionPhase.lapsed($0, at: now) }
         }
         let quotas = (cached ?? [:]).values.sorted { $0.credential.pool.id < $1.credential.pool.id }
+        let events = local.sessions.flatMap(\.events)
+        // Explicit attribution owns a consumer before its route does. A route can identify today's pool only when
+        // the service has one active pool; two accounts or scopes must never be resolved by their sort order.
+        let recordedPools = Dictionary(grouping: events.compactMap { event in
+            event.attribution?.pool.map { (event.agentId, $0) }
+        }, by: { $0.0 }).mapValues { Set($0.map { $0.1 }) }
+        let servicePools = Dictionary(grouping: quotas.filter(\.isActive), by: { $0.credential.service })
+            .compactMapValues { results -> BillingPool? in
+                let pools = Set(results.map { $0.credential.pool })
+                return pools.count == 1 ? pools.first : nil
+            }
+        func claim(id agentId: String) -> BillingPool? {
+            if let pools = recordedPools[agentId] { return pools.count == 1 ? pools.first : nil }
+            let route = agentId.split(separator: "#", maxSplits: 1).dropFirst().first.map(String.init)
+            guard let route, let mark = agentId.range(of: "-model:") else { return nil }
+            let client = OpenAgentSource(rawValue: String(agentId[..<mark.lowerBound]))
+            guard let service = OpenAgentCredentials.service(provider: route, client: client) else { return nil }
+            return servicePools[service]
+        }
         // Empty sets explicitly retire expired, removed, rejected, or superseded pools.
         var activePools = Dictionary(uniqueKeysWithValues: Self.poolProviders.map { ($0, Set<String>()) })
         for result in quotas where result.isActive { activePools[result.credential.pool.provider, default: []].insert(result.credential.pool.id) }
         await record(local, since: readFrom)
-        let events = local.sessions.flatMap(\.events)
+        // Every consumer this source ever recorded — raw events and buckets alike; a window's own period bounds
+        // what a claim counts, so the claims universe itself is unbounded.
+        let consumerIds = Set(events.map(\.agentId)).union((try? await ledger.consumers(source: Self.source)) ?? [])
         var consumers: [String: AgentDescriptor] = [:]
         for item in local.sessions {
             for event in item.events {
                 consumers[event.agentId] = AgentDescriptor(id: event.agentId, vendor: item.client.name, model: ModelCatalog.consumerName(of: event.agentId),
                     source: L10n.text("本地记录 · 计费归属未确认", "Local records · billing unconfirmed"), enabled: true,
-                    billingPool: event.attribution?.pool)
+                    billingPool: claim(id: event.agentId))
             }
         }
         // Tokens and models come from every session of `historyHours`; sessions only from those active in the session window
@@ -250,14 +271,16 @@ actor OpenAgentUsageProvider: UsageProvider, LedgerRecording {
             }
             for window in quota.windows {
                 let snapshot = UsageSnapshot(agentId: window.id, remainingPct: window.remaining, resetAt: window.reset,
-                                             windowDuration: window.duration, updatedAt: result.at)
+                                             windowDuration: window.duration, updatedAt: result.at,
+                                             used: window.used, capacity: window.capacity)
                 snapshots.append(snapshot)
                 descriptors.append(.init(id: window.id, vendor: shownUnder,
                     model: window.label, shortModel: window.shortLabel ?? window.label,
                     source: result.credential.clients.sorted().joined(separator: ", "), enabled: true, billingPool: pool,
                     account: ProviderAccount(pool: pool), allModels: window.allModels))
-                // Historical records lacking a pool must not inherit the current credential's quota.
-                links[window.id] = Set(events.filter { $0.attribution?.pool == pool }.map(\.agentId))
+                // Keep a recorded pool first; otherwise a route can claim the consumer only when its service's
+                // current pool is unambiguous. Ledger-only consumers use that same rule.
+                links[window.id] = Set(consumerIds.filter { claim(id: $0) == pool })
                 let readings = await history.samples(agentId: window.id, since: QuotaMath.historyStart(for: snapshot, now: now))
                 insights[window.id] = QuotaMath.insights(snapshot: snapshot, samples: readings, now: now)
             }

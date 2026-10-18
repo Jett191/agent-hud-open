@@ -75,7 +75,7 @@ extension UsageReport {
                     readingIssues: readingIssues, consumerIdsByQuota: consumerIdsByQuota, billing: billing, codexResetCredits: codexResetCredits,
                     codexResetCreditsObservedAt: codexResetCreditsObservedAt, completions: completions, turns: turns,
                     services: services, activeQuotaPoolIDs: activeQuotaPoolIDs, accounts: accounts,
-                    forgottenAccountProviders: forgottenAccountProviders, sessionUsage: sessionUsage,
+                    forgottenAccountProviders: forgottenAccountProviders, sessionUsage: sessionUsage, replyRates: replyRates,
                     sessionCredits: sessionCredits,
                     periods: periods,
                     recached: recached, rowSeenAt: Dictionary(discoveredAgents.map { ($0.id, generatedAt) }, uniquingKeysWith: { first, _ in first }))
@@ -163,6 +163,7 @@ extension UsageReport {
             activeQuotaPoolIDs: (previous.activeQuotaPoolIDs ?? [:]).merging(activeQuotaPoolIDs ?? [:], uniquingKeysWith: { _, new in new }),
             accounts: accounts,
             sessionUsage: Self.retainedSessionUsage(sessionUsage, previous: previous.sessionUsage, sessions: retainedSessions),
+            replyRates: replyRates ?? previous.replyRates,
             sessionCredits: Self.retainedSessionCredits(sessionCredits, previous: previous.sessionCredits),
             // Like `usage`, the periods come from the ledger, which keeps what a failed refresh recorded before.
             periods: periods, recached: recached,
