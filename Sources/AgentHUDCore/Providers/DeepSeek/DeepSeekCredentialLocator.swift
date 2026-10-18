@@ -35,6 +35,9 @@ enum DeepSeekCredentialLocator {
                     > ((try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
             }.map { $0.appendingPathComponent("node_modules") }
         }
-        return roots.map { $0.appendingPathComponent(package) }.first { FileManager.default.fileExists(atPath: $0.path) }
+        // A global `dsh` install keeps the package in its own node_modules, not beside itself.
+        let candidates = roots.map { $0.appendingPathComponent(package) }
+            + roots.map { $0.appendingPathComponent("@deepseek-ai/dsh/node_modules").appendingPathComponent(package) }
+        return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
     }
 }
