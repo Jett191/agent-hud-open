@@ -45,7 +45,7 @@ final class ClientDeclarationTests: XCTestCase {
     /// Codex's hook never carries a question or a plan: Desktop's come from the thread it owns.
     func testAQuestionOrAPlanComesThroughTheHookOnlyWhereTheHUDDoesNotLeaveItToTheClient() {
         for source in PermissionHooks.Source.allCases where source.usesHook && source != .codex {
-            let tools = source == .qwen ? (question: "ask_user_question", plan: "exit_plan_mode")
+            let tools = source == .qwen || source == .devin ? (question: "ask_user_question", plan: "exit_plan_mode")
                 : (question: "AskUserQuestion", plan: PermissionRequest.planTool)
             let kinds = Set(ClientDeclarations[source.client].requests.filter { $0.arrives == permissionHook }.map(\.kind))
             XCTAssertEqual(kinds.contains(.question), !source.unanswerableTools.contains(tools.question), source.rawValue)
@@ -87,6 +87,6 @@ final class ClientDeclarationTests: XCTestCase {
     func testTheClientsBelowTheBaselineAreTheOnesStillToMove() {
         let below = AgentClient.allCases.filter { !ClientDeclarations[$0].belowBaseline.isEmpty }
         XCTAssertEqual(below, [.antigravity, .grokCLI, .grokBot, .copilot, .openclaw, .hermes, .zcode, .codebuddy, .workbuddy,
-                               .qwen, .opencode, .kimi, .pi])
+                               .qwen, .opencode, .kimi, .pi, .devin])
     }
 }

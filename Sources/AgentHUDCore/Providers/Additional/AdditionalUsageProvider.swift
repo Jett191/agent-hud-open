@@ -60,6 +60,7 @@ actor AdditionalUsageProvider: UsageProvider, LedgerRecording {
             case .cursor: return try await cursor.quota()
             case .grok: return try await grok.fetch()
             case .copilot: return try await CopilotClient(enabled: consented).fetch()
+            case .devin: return try await DevinQuota.read()
             case .openclaw, .hermes, .zcode, .codebuddy, .workbuddy, .qwen: return ProviderQuota()
             }
         }, readSessions: { since in

@@ -199,11 +199,13 @@ public struct PermissionRequest: Identifiable, Equatable, Sendable {
     static let detailLength = 2048
     static let fileTools: Set<String> = ["Read", "Write", "Edit", "MultiEdit", "NotebookEdit"]
 
-    /// Qwen Code's names for the tools Claude Code has, whose inputs use the same keys; a call reads the same
-    /// whichever client makes it.
-    static let aliases = ["run_command": "Bash", "run_shell_command": "Bash", "edit": "Edit", "replace": "Edit", "write_file": "Write",
-                          "read_file": "Read", "glob": "Glob", "grep_search": "Grep", "search_file_content": "Grep",
-                          "web_fetch": "WebFetch", "web_search": "WebSearch", "agent": "Agent", "task": "Task"]
+    /// Qwen Code's and Devin's names for the tools Claude Code has, whose inputs use the same keys; a call reads the
+    /// same whichever client makes it.
+    static let aliases = ["run_command": "Bash", "run_shell_command": "Bash", "exec": "Bash", "edit": "Edit", "replace": "Edit",
+                          "write_file": "Write", "write": "Write", "read_file": "Read", "read": "Read", "glob": "Glob",
+                          "grep_search": "Grep", "search_file_content": "Grep", "grep": "Grep", "web_fetch": "WebFetch",
+                          "webfetch": "WebFetch", "web_search": "WebSearch", "notebook_edit": "NotebookEdit",
+                          "agent": "Agent", "task": "Task"]
     static func kind(_ tool: String) -> String { aliases[tool] ?? tool }
 
     /// Reads a client's hook payload. A payload without a session cannot be shown next to the session it belongs to,
@@ -421,7 +423,7 @@ public enum PermissionDecision: Sendable, Equatable {
         case .allow, .deny:
             break
         }
-        return Self.encode(decision)
+        return Self.encode(decision, for: source)
     }
 
     /// The answer for this request. A question's answers go back as the call's own input with the answers filled
@@ -465,7 +467,13 @@ public enum PermissionDecision: Sendable, Equatable {
         return note.isEmpty ? reviewed + " They want to keep planning." : reviewed + " Their feedback: " + note
     }
 
-    private static func encode(_ decision: [String: JSONValue]) -> Data {
+    /// Devin CLI reads a top-level `decision` string — "approve" or "block" — rather than Claude's nested
+    /// `hookSpecificOutput.decision.behavior`; an omitted answer still means its own dialog decides.
+    private static func encode(_ decision: [String: JSONValue], for source: PermissionHooks.Source? = nil) -> Data {
+        if source == .devin {
+            let word = decision["behavior"] == .string("allow") ? "approve" : "block"
+            return (try? RecordCoding.encoder().encode(JSONValue.object(["decision": .string(word)]))) ?? Data()
+        }
         let payload: [String: JSONValue] = [
             "hookSpecificOutput": .object([
                 "hookEventName": .string("PermissionRequest"),

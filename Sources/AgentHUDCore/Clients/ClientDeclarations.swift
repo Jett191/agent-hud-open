@@ -111,6 +111,13 @@ public enum ClientDeclarations {
             declaration.usage = [log]
             declaration.state = [.waitingForApproval: [permissionHook], .waitingForReply: [.hook("Stop")]]
             declaration.requests = [hookApproval([.allowOnce, .deny])]
+        case .devin:
+            let database = Channel.whole("session database")
+            declaration.sessions = [database]
+            declaration.usage = [database, .whole("user status cache")]
+            declaration.state = [.running: [database], .waitingForApproval: [permissionHook],
+                                 .waitingForReply: [.hook("Stop")]]
+            declaration.requests = [hookApproval([.allowOnce, .deny])]
         case .opencode:
             let database = Channel.whole("session database")
             declaration.sessions = [database]

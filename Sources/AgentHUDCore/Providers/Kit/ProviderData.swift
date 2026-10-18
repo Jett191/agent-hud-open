@@ -3,7 +3,7 @@ import Foundation
 
 /// The additional integrations share reporting, while each owns its protocol and parser.
 public enum AdditionalSource: String, CaseIterable, Sendable {
-    case antigravity, cursor, grok, copilot, openclaw, hermes, zcode, codebuddy, workbuddy, qwen
+    case antigravity, cursor, grok, copilot, openclaw, hermes, zcode, codebuddy, workbuddy, qwen, devin
 
     public var vendor: String {
         switch self {
@@ -17,6 +17,7 @@ public enum AdditionalSource: String, CaseIterable, Sendable {
         case .codebuddy: "CodeBuddy"
         case .workbuddy: "WorkBuddy"
         case .qwen: "Qwen"
+        case .devin: "Devin"
         }
     }
 
@@ -32,13 +33,14 @@ public enum AdditionalSource: String, CaseIterable, Sendable {
         case .codebuddy: L10n.text("CodeBuddy Code 本地会话与用量", "CodeBuddy Code local sessions and usage")
         case .workbuddy: L10n.text("WorkBuddy 本地会话与用量", "WorkBuddy local sessions and usage")
         case .qwen: L10n.text("Qwen Code 本地会话与用量", "Qwen Code local sessions and usage")
+        case .devin: L10n.text("Devin 本地会话、用量与额度", "Devin local sessions, usage and quota")
         }
     }
 
     /// Database readers return only this much recent history, however long the requested window.
     var readerWindow: TimeInterval? {
         switch self {
-        case .openclaw, .hermes, .zcode: 8 * 86400
+        case .openclaw, .hermes, .zcode, .devin: 8 * 86400
         default: nil
         }
     }
