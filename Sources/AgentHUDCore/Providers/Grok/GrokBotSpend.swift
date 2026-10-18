@@ -10,15 +10,6 @@ enum GrokBotSpend {
     /// Rows grouped under a name that is no bot id are unattributed; the dashboard folds them into this bucket.
     static let unattributed = "other-bots"
 
-    /// The account's per-bot daily usage folded into its billing sessions, or those sessions unchanged when the
-    /// service holds no metered rows or the read fails: the request-level events stand on their own either way.
-    static func sessions(from cursor: CursorClient, into billing: ProviderSessions, since: Date, until: Date,
-                       http: ProviderHTTP = ProviderHTTP()) async -> ProviderSessions {
-        guard let auth = try? await cursor.session(),
-              let reply = try? await dailySpend(auth: auth, since: since, until: until, http: http) else { return billing }
-        return merged(reply, account: auth.account, into: billing)
-    }
-
     /// The app's own usage-breakdown request: `SpendGroupByCategory.GROK_BOT` scoped to the desktop client and the
     /// sand product, matching the calls Grok Bot's settings page makes for its chart. The reply's shape is verified
     /// against the proto schemas embedded in the app's bundle: `GetDailySpendByCategoryResponse` carries
@@ -44,7 +35,7 @@ enum GrokBotSpend {
     /// exact-native-id join. A conversation the request-level events already billed keeps them, since a daily total
     /// would count the same usage a second time and carries no model or input/output split.
     static func merged(_ reply: ProviderJSON, account: String, into billing: ProviderSessions) -> ProviderSessions {
-        var events: [String: [ProviderEvent]] = [:], order: [String] = []
+        var totals: [String: [Date: Int]] = [:]
         let billed = Set(billing.sessions.map(\.id))
         for row in reply["dailySpend"].arrayValue ?? [] {
             guard let category = row["category"].stringValue,
@@ -54,19 +45,20 @@ enum GrokBotSpend {
             guard GrokBotCache.isAgentID(conversation) else { continue }
             let id = "cursor-account:\(account):\(conversation)"
             guard !billed.contains(id) else { continue }
-            if events[conversation] == nil { order.append(conversation) }
-            events[conversation, default: []].append(ProviderEvent(
-                id: "spend-\(conversation)-\(Int(day.timeIntervalSince1970))",
-                model: "grok-bot", timestamp: day, input: tokens, output: 0))
+            totals[conversation, default: [:]][day, default: 0] += tokens
         }
-        guard !order.isEmpty else { return billing }
+        guard !totals.isEmpty else { return billing }
         var result = billing
-        for conversation in order.sorted() {
+        for conversation in totals.keys.sorted() {
+            let events = totals[conversation, default: [:]].sorted { $0.key > $1.key }.map { day, tokens in
+                ProviderEvent(id: "spend-\(conversation)-\(Int(day.timeIntervalSince1970))",
+                    model: "grok-bot", timestamp: day, input: tokens, output: 0)
+            }
             let subagent = GrokBotUsage.subagentID(conversation)
             result.sessions.append(ProviderSession(id: "cursor-account:\(account):\(conversation)",
                 title: subagent.map { L10n.text("Grok Bot 子代理", "Grok Bot subagent") + " · " + $0.prefix(8) }
                     ?? "Cursor · \(conversation.prefix(8))",
-                client: subagent == nil ? "Cursor" : "Grok Bot", events: events[conversation] ?? [], accountWide: true))
+                client: subagent == nil ? "Cursor" : "Grok Bot", events: events, accountWide: true))
         }
         return result
     }

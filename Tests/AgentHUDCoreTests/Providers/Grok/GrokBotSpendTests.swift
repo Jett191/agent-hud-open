@@ -51,7 +51,7 @@ final class GrokBotSpendTests: XCTestCase {
         }
     }
 
-    func testUnattributedSpendKeepsItsOwnBucketAndUnreadableRowsAreSkipped() throws {
+    func testUnattributedSpendKeepsItsOwnBucketAndUnreadableRowsAreSkipped() async throws {
         let billing = GrokBotSpend.merged(reply([
             spend(day: 1799999900000, category: "Other", cents: 3, tokens: .string("70")),
             spend(day: 1799999900000, category: "unattributed", cents: 1, tokens: .string("30")),
@@ -61,8 +61,15 @@ final class GrokBotSpendTests: XCTestCase {
             .object(["day": .string("1799999900000"), "category": .string("no-tokens"), "spendCents": .number(2)]),
         ]), account: "billing-account", into: ProviderSessions())
         let bucket = try XCTUnwrap(billing.sessions.first { $0.id == "cursor-account:billing-account:other-bots" })
-        XCTAssertEqual(bucket.events.map(\.input), [70, 30], "both unattributed names fold into the dashboard's own bucket")
+        XCTAssertEqual(bucket.events.map(\.input), [100], "both unattributed names share one daily total and event identity")
         XCTAssertEqual(billing.sessions.count, 1)
+        let ledger = UsageLedger.inMemory(), now = now
+        let provider = AdditionalUsageProvider(source: .cursor, readQuota: { .init() }, readSessions: { _ in billing },
+            history: QuotaHistoryStore(), clock: { now }, ledger: ledger)
+        let report = try await provider.fetchAccountAndLocalUsage(agents: [], historyHours: 168)
+        XCTAssertEqual(report.sessions.reduce(0) { $0 + $1.tokensIn }, 100)
+        let usage = try await ledger.buckets(since: .distantPast, source: AdditionalSource.cursor.rawValue)
+        XCTAssertEqual(usage.reduce(0) { $0 + $1.tokensIn }, 100, "canonical event deduplication must keep the full bucket")
     }
 
     func testASubagentRowIsNamedLikeTheBillingSubagentItStandsFor() throws {

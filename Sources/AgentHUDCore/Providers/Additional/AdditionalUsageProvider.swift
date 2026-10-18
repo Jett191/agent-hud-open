@@ -72,9 +72,7 @@ actor AdditionalUsageProvider: UsageProvider, LedgerRecording {
             return try CompletionHooks.read(source: hook, since: since)
         }, botQuotaDirectory: source == .grok ? grok.botDirectory : nil, refreshSessions: { hours in
             if source == .cursor {
-                let start = Date().addingTimeInterval(-Double(max(168, hours)) * 3600)
-                var read = await cursor.sessions(since: start)
-                read = await GrokBotSpend.sessions(from: cursor, into: read, since: start, until: Date())
+                let read = await cursor.sessions(since: Date().addingTimeInterval(-Double(max(168, hours)) * 3600))
                 await grokBotRoutineRuns?.refresh(billed: read.sessions.map(\.id)) { try await cursor.grokBotAutomations(agentIDs: $0) }
             }
         }, watchedDirectories: local.roots + (CompletionHooks.Source(rawValue: source.rawValue).map {
