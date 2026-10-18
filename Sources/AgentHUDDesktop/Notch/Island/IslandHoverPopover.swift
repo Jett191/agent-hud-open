@@ -27,6 +27,7 @@ struct IslandHoverPopover<Content: View>: NSViewRepresentable {
 
 final class IslandHoverAnchorView<Content: View>: NSView {
     var onHover: (Bool) -> Void = { _ in }
+    var mouseLocation: @MainActor () -> CGPoint = { NSEvent.mouseLocation }
     private var hoverArea: NSTrackingArea?
     private var pointerLocation: CGPoint?
     private var content: Content
@@ -89,6 +90,23 @@ final class IslandHoverAnchorView<Content: View>: NSView {
             if popup.panel.hasShadow == look.seeThrough {
                 popup.panel.hasShadow = !look.seeThrough
                 popup.panel.invalidateShadow()
+            }
+        }
+        // A tracking area fires only when the pointer crosses the rect in the window's coordinates: when the panel's
+        // window moves or the row shifts under a still pointer the exit never comes and the popup would stay pinned.
+        // Reconcile with where the cursor actually is so a missed exit clears on this pass instead.
+        var isHovered = isHovered
+        if isHovered, let window {
+            let point = convert(window.convertPoint(fromScreen: mouseLocation()), from: nil)
+            if !bounds.insetBy(dx: -1, dy: -1).contains(point) {
+                pointerLocation = nil
+                // Updating an NSViewRepresentable must not synchronously change its SwiftUI binding. A new enter
+                // before this task runs has a pointer location again and owns the newer hover state.
+                Task { @MainActor [weak self] in
+                    guard let self, self.pointerLocation == nil else { return }
+                    self.onHover(false)
+                }
+                isHovered = false
             }
         }
         guard isHovered, enabled, let window, let pointerLocation else {
