@@ -232,7 +232,7 @@ struct QuotaRowMetrics {
 
     var exhaustionTimeLabel: String? {
         guard let date = exhaustsBeforeReset else { return nil }
-        if date.timeIntervalSince(now) < 7 * 86400 { return ChartData.weekdayTime(date) }
+        if date.timeIntervalSince(now) < 7 * 86400 { return ChartData.relativeWeekdayTime(date, now: now) }
         return date.formatted(Date.FormatStyle().month(.abbreviated).day()
             .hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)
             .locale(L10n.dateLocale))

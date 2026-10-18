@@ -72,8 +72,8 @@ final class QuotaOutlookTests: XCTestCase {
     @MainActor
     func testEverySurfaceOverTheSameWindows() throws {
         let hour = hour
-        /// The weekday and time `interval` from now, as the island row writes a nearby exhaustion in this Mac's time zone.
-        func at(_ interval: TimeInterval) -> String { ChartData.weekdayTime(now.addingTimeInterval(interval)) }
+        /// The week, weekday and time of a nearby exhaustion in this Mac's time zone.
+        func at(_ interval: TimeInterval) -> String { ChartData.relativeWeekdayTime(now.addingTimeInterval(interval), now: now) }
         // The row says what the hint says, except that it gives the time a window runs out at before its reset.
         let expected: [(String, Outlook)] = [
             ("untimed", .init(hint: nil, exhaustsIn: nil, projected: nil, detail: "—", tokensPerHour: nil)),
@@ -143,7 +143,7 @@ final class QuotaOutlookTests: XCTestCase {
             // The model the windows count has no list price, so the cycle has no cost.
             XCTAssertEqual(PanelMeasure.allCases.map { row.value($0) }, ["90%", "10.0%/h", "9.5/s", "3.0k", nil])
             XCTAssertEqual(PanelMeasure.allCases.map { row.detail($0, isLoading: false) },
-                           ["2h 00m", ChartData.weekdayTime(now.addingTimeInterval(hour)), "3 replies", "1.0k/h", "—"])
+                           ["2h 00m", ChartData.relativeWeekdayTime(now.addingTimeInterval(hour), now: now), "3 replies", "1.0k/h", "—"])
             XCTAssertEqual(store.view.consumed(for: window.name)?.used, 3000, "only the cycle's selected model counts")
             let date = now.addingTimeInterval(10 * 86400)
             XCTAssertEqual(try metrics("monthly", in: store).exhaustionTimeLabel, date.formatted(Date.FormatStyle().month(.abbreviated).day()
