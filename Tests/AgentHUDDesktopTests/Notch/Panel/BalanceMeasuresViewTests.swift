@@ -106,12 +106,12 @@ final class BalanceMeasuresViewTests: XCTestCase {
         XCTAssertEqual(empty.figure(.second, of: .burnRate), figure("Runs out", "Exhausted", .level))
     }
 
-    /// Within a week a run-out is a weekday and a time, as a window's is; then a date and a time; and from a year on, the
+    /// Within seven days a run-out names its calendar week, weekday and time; then a date and time; and from a year on, the
     /// month and the year, which a slow pace reaches.
     func testARunOutIsWrittenByHowFarAheadItIs() {
         L10n.setLanguage(.en)
-        let soon = now.addingTimeInterval(3 * 86400)
-        XCTAssertEqual(BalanceMetrics.runOutLabel(soon, now: now), ChartData.weekdayTime(soon))
+        let soon = Calendar.current.dateInterval(of: .weekOfYear, for: now)!.end.addingTimeInterval(12 * 3600)
+        XCTAssertEqual(BalanceMetrics.runOutLabel(soon, now: now), "Next " + ChartData.weekdayTime(soon))
         let month = BalanceMetrics.runOutLabel(now.addingTimeInterval(30 * 86400), now: now)
         XCTAssertTrue(month.contains(":"), month)
         XCTAssertFalse(month.contains("2027"), month)

@@ -141,6 +141,21 @@ final class ResetLabelTests: XCTestCase {
         XCTAssertEqual(Countdown.resetLabel(nil, now: now, calendar: calendar), "—")
     }
 
+    func testCountdownAndCompactLabelsShareRelativeCalendarWeeks() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.firstWeekday = 1
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 17, hour: 10))! // Saturday
+        let sunday = calendar.date(from: DateComponents(year: 2026, month: 10, day: 18, hour: 16, minute: 10))!
+        let monday = calendar.date(from: DateComponents(year: 2026, month: 10, day: 19, hour: 16, minute: 10))!
+        XCTAssertEqual(Countdown.resetLabel(sunday, now: now, calendar: calendar), "周日 16:10")
+        XCTAssertEqual(Countdown.resetLabel(monday, now: now, calendar: calendar), "下周一 16:10")
+        XCTAssertEqual(Countdown.resetLabelCompact(monday, now: now, calendar: calendar), "下周一 16:10")
+        L10n.setLanguage(.en)
+        XCTAssertEqual(Countdown.resetLabel(sunday, now: now, calendar: calendar), "Next Sun 16:10")
+        XCTAssertEqual(Countdown.resetLabelCompact(sunday, now: now, calendar: calendar), "Next Sun 16:10")
+    }
+
     func testQuotaWindowRowsFollowUsageScreenOrder() {
         let usage = ClaudeUsage(
             fiveHour: ClaudeUsageWindow(utilizationPct: 23, resetsAt: nil),
