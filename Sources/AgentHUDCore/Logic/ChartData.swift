@@ -227,4 +227,30 @@ public enum ChartData {
         return "\(weekdayName(date, calendar: calendar)) \(String(format: "%02d:%02d", hh, mm))"
     }
 
+    /// A future date's weekday with which week it falls in, "下周二 16:10" / "Next Tue 16:10", so two
+    /// Tuesdays apart still read differently. The week a date shares with `now` needs no marker, and a date
+    /// more than three weeks out names its concrete month and day instead of piling up "下".
+    public static func relativeWeekdayTime(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
+        // "下周" in Chinese counts Monday-started weeks whatever the system calendar prefers; English
+        // follows the locale's own week start, where "next" week begins Sunday in the US and Monday in the UK.
+        var cal = calendar
+        if L10n.resolved == .zhHans { cal.firstWeekday = 2 }
+        let delta = weeksBetween(now, and: date, calendar: cal)
+        guard delta > 0 else { return weekdayTime(date, calendar: calendar) }
+        if delta <= 3 {
+            let zh = String(repeating: "下", count: delta) + weekdayTime(date, calendar: calendar)
+            let en = delta == 1 ? "Next \(weekdayTime(date, calendar: calendar))" : dateTime(date, calendar: calendar)
+            return L10n.text(zh, en)
+        }
+        return dateTime(date, calendar: calendar)
+    }
+
+    /// Whole calendar weeks between the week containing `from` and the week containing `to`, by each locale's
+    /// own week start; negative when `to` sits in an earlier week.
+    private static func weeksBetween(_ from: Date, and to: Date, calendar: Calendar) -> Int {
+        guard let a = calendar.dateInterval(of: .weekOfYear, for: from)?.start,
+              let b = calendar.dateInterval(of: .weekOfYear, for: to)?.start else { return 0 }
+        return calendar.dateComponents([.weekOfYear], from: a, to: b).weekOfYear ?? 0
+    }
+
 }

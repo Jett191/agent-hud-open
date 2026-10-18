@@ -298,7 +298,7 @@ struct BalanceMetrics {
     /// time, and from a year on, which a slow pace can reach, the month and the year.
     static func runOutLabel(_ date: Date, now: Date) -> String {
         let ahead = date.timeIntervalSince(now)
-        if ahead < 7 * 86400 { return ChartData.weekdayTime(date) }
+        if ahead < 7 * 86400 { return ChartData.relativeWeekdayTime(date, now: now) }
         let style = Date.FormatStyle().locale(L10n.dateLocale)
         if ahead < 365 * 86400 {
             return date.formatted(style.month(.abbreviated).day().hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
