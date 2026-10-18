@@ -324,7 +324,7 @@ final class AgentSettingsTests: XCTestCase {
         XCTAssertTrue(groups[5].agents.isEmpty)
     }
 
-    func testEverySupportedSourceRemainsListedWhenNoneIsInstalledWithoutInventingReadings() {
+    func testEverySupportedSourceRemainsListedWhenNoneIsInstalledWithoutInventingReadings() throws {
         // The detector uses these existing catalogs plus the core clients; no second table of supported names.
         let enumerated = Set(AdditionalSource.allCases.map(\.vendor) + OpenAgentSource.allCases.map(\.name) + ["Grok CLI", "Grok Bot"])
         let coreClients = SessionSource.agentVendors.filter { !enumerated.contains($0) }
@@ -339,7 +339,7 @@ final class AgentSettingsTests: XCTestCase {
         } + OpenAgentSource.allCases.map {
             SourceStatus(id: $0.rawValue, name: $0.name, detail: $0.detail, state: .notDetected)
         }
-        XCTAssertEqual(sources.count, 18)
+        XCTAssertEqual(sources.count, 19, "18 execution clients plus the standalone GLM quota source")
         XCTAssertEqual(Set(sources.map(\.name)).count, sources.count)
         let groups = AgentSettingsGroup.make(sources: sources, agents: [])
         var seen = Set<String>()
@@ -349,6 +349,11 @@ final class AgentSettingsTests: XCTestCase {
         XCTAssertTrue(groups.allSatisfy { $0.agents.isEmpty && $0.accounts.isEmpty && $0.billingAccounts.isEmpty
             && $0.unobservedAccounts.isEmpty && $0.plans.isEmpty && $0.apiProviders.isEmpty
             && $0.displayedCount(settings: Settings()) == 0 }, "An undetected source is not a quota window or an observed account")
+        let devin = try XCTUnwrap(groups.first { $0.id == "Devin" }, "Devin stays available in settings before it is installed")
+        XCTAssertEqual(devin.source?.id, "devin")
+        XCTAssertEqual(devin.source?.state, .notDetected)
+        XCTAssertTrue(devin.agents.isEmpty && devin.accounts.isEmpty, "A missing Devin CLI invents neither quota windows nor an account")
+        XCTAssertEqual(devin.displayedCount(settings: Settings()), 0)
     }
 
     func testGroupsListOnlyRowsAProviderStillReports() {
