@@ -5,6 +5,76 @@ import AgentHUDCore
 
 final class GlowPreparationTests: XCTestCase {
     @MainActor
+    func testSimpleWindowFitsShadowsWithoutChangingTheirScreenCoordinates() throws {
+        _ = NSApplication.shared
+        for edge in HUDEdge.allCases {
+            let geometry = geometry(edge: edge, mode: .simple)
+            let controller = GlowWindowController(geometry: geometry)
+            defer { controller.close() }
+            let behaviors = controller.panel.collectionBehavior
+            let looks: [HUDLook] = [.standard, HUDLook(appearance: .light),
+                                    HUDLook(appearance: .dark, material: .glass)]
+            for look in looks {
+                for size in [geometry.rect.size, CGSize(width: 300, height: 180)] {
+                    let island = geometry.expandedFrame(size: size)
+                    let shell = HUDShell(frame: island, radius: 12, flare: 0, floats: true, bare: false)
+                    let shells = HUDShells(surface: shell, dock: nil)
+                    let glow = GlowSettings().geometry(islandWidth: island.width, islandHeight: island.height, islandRadius: 12)
+                    controller.update(geometry: geometry, island: island, islandRadius: 12, islandFlare: 0, glow: glow,
+                        outwardOnly: true, appearance: .idle(), look: look, shells: shells,
+                        animated: false, animatesShells: false, drawsGlow: false)
+                    let host = try XCTUnwrap(controller.panel.contentView)
+                    let canvas = try XCTUnwrap(host.layer)
+                    let layer = look.castsShellShadows ? controller.shellShadowLayer : controller.shadowLayer
+                    let local = layer.convert(layer.bounds, to: canvas)
+                    let screen = local.offsetBy(dx: geometry.screenFrame.minX, dy: geometry.screenFrame.minY)
+                    let displayed = controller.panel.convertToScreen(host.convert(local, to: nil))
+                    XCTAssertEqual(displayed.minX, screen.minX, accuracy: 0.5)
+                    XCTAssertEqual(displayed.minY, screen.minY, accuracy: 0.5)
+                    XCTAssertEqual(displayed.size, screen.size)
+                    XCTAssertTrue(controller.panel.frame.insetBy(dx: -1, dy: -1)
+                        .contains(screen.intersection(geometry.screenFrame)), "\(edge): no clipped shadow")
+                    XCTAssertEqual(controller.panel.frame.minX - host.bounds.minX, geometry.screenFrame.minX, accuracy: 0.5)
+                    XCTAssertEqual(controller.panel.frame.minY - host.bounds.minY, geometry.screenFrame.minY, accuracy: 0.5)
+                    XCTAssertLessThan(controller.panel.frame.width * controller.panel.frame.height,
+                                      geometry.screenFrame.width * geometry.screenFrame.height)
+                    XCTAssertEqual(controller.panel.collectionBehavior, behaviors)
+                    XCTAssertEqual(controller.panel.level, .statusBar)
+                    XCTAssertTrue(controller.panel.isVisible)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func testSimpleDelayedShellAndAnimationKeepBothShadowLocationsInsideTheWindow() throws {
+        _ = NSApplication.shared
+        let geometry = geometry(edge: .top, mode: .simple)
+        let controller = GlowWindowController(geometry: geometry)
+        defer { controller.close() }
+        let look = HUDLook(appearance: .light)
+        let dock = HUDShell(frame: geometry.rect, radius: 12, flare: 0, floats: true, bare: false)
+        let card = HUDShell(frame: geometry.rect.offsetBy(dx: 240, dy: -180), radius: 12, flare: 0, floats: true, bare: false)
+        let glow = GlowSettings().geometry(islandWidth: geometry.rect.width, islandHeight: geometry.rect.height, islandRadius: 12)
+        controller.update(geometry: geometry, island: geometry.rect, islandRadius: 12, islandFlare: 0, glow: glow,
+            outwardOnly: true, appearance: .idle(), look: look, shells: HUDShells(surface: nil, dock: dock),
+            animated: false, animatesShells: false, drawsGlow: false)
+        let before = controller.panel.frame
+        controller.updateShells(HUDShells(surface: card, dock: dock), look: look, geometry: geometry, animates: true)
+        XCTAssertTrue(controller.panel.frame.contains(before), "the dock remains covered when a held card shadow arrives")
+        let expanded = controller.panel.frame
+        controller.updateShells(HUDShells(surface: dock, dock: nil), look: look, geometry: geometry, animates: true)
+        XCTAssertTrue(controller.panel.frame.contains(expanded), "a fading shadow keeps its old location until it disappears")
+
+        let logos = self.geometry(edge: .top, mode: .logos)
+        controller.update(geometry: logos, island: logos.rect, islandRadius: 12, islandFlare: 0, glow: glow,
+            outwardOnly: true, appearance: .idle(), look: look, shells: HUDShells(surface: dock, dock: nil),
+            animated: false, animatesShells: false, drawsGlow: false)
+        XCTAssertEqual(controller.panel.frame, logos.screenFrame, "other modes retain their original canvas")
+        XCTAssertEqual(controller.panel.contentView?.bounds.origin, .zero)
+    }
+
+    @MainActor
     func testACancelledWorkerDoesNotRasterizeItsMaterials() async {
         _ = NSApplication.shared
         let geometry = geometry()
@@ -484,10 +554,10 @@ final class GlowPreparationTests: XCTestCase {
                 shells: HUDShells(surface: HUDShell(frame: panel, radius: 10, flare: 0, floats: true, bare: false), dock: nil),
                 animated: false, animatesShells: false, drawsGlow: false)
             let host = try XCTUnwrap(controller.panel.contentView)
-            let shadow = controller.shellShadowLayer.convert(controller.shellShadowLayer.bounds, to: host.layer)
-            let local = panel.offsetBy(dx: -controller.panel.frame.minX, dy: -controller.panel.frame.minY)
-            XCTAssertEqual(shadow.midX, local.midX, accuracy: 0.01, "\(edge): the shadow stays under the panel")
-            XCTAssertEqual(shadow.midY, local.midY - GlowRenderer.shellShadowDrop, accuracy: 0.01,
+            let shadow = controller.panel.convertToScreen(host.convert(
+                controller.shellShadowLayer.convert(controller.shellShadowLayer.bounds, to: host.layer), to: nil))
+            XCTAssertEqual(shadow.midX, panel.midX, accuracy: 0.01, "\(edge): the shadow stays under the panel")
+            XCTAssertEqual(shadow.midY, panel.midY - GlowRenderer.shellShadowDrop, accuracy: 0.01,
                            "\(edge): and falls down the screen")
         }
     }

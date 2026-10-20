@@ -114,6 +114,7 @@ final class IslandHoverAnchorView<Content: View>: NSView {
             return
         }
         let popup = self.popup ?? makePopup()
+        popup.panel.collectionBehavior = window.collectionBehavior
         position(popup.panel, in: window, at: pointerLocation, size: popup.details.fittingSize)
         if popup.panel.parent !== window { window.addChildWindow(popup.panel, ordered: .above) }
         popup.panel.orderFrontRegardless()

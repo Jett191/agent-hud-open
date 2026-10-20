@@ -121,7 +121,8 @@ final class GlowWindowController {
     }
 
     init(geometry: NotchGeometry) {
-        panel = OverlayPanel(frame: Self.panelFrame(for: geometry), level: .statusBar, acceptsMouse: false)
+        panel = OverlayPanel(frame: geometry.mode == .simple ? geometry.rect : Self.panelFrame(for: geometry),
+                             level: .statusBar, acceptsMouse: false)
         panel.setAccessibilityElement(false)
         panel.setAccessibilityHidden(true)
         host.wantsLayer = true
@@ -175,6 +176,33 @@ final class GlowWindowController {
             width: panelWidth,
             height: geometry.screenFrame.height
         )
+    }
+
+    /// Both the target and the currently drawn shadow, in the unchanged drawing canvas.
+    private var shadowBounds: CGRect {
+        guard let canvas = host.layer else { return .null }
+        var bounds = CGRect.null
+        for layer in [shadowLayer, shellShadowLayer, dockShadowLayer] where !layer.isHidden && layer.contents != nil {
+            if layer.opacity > 0 {
+                bounds = bounds.union(layer.convert(layer.bounds, to: canvas))
+            }
+            if let moving = layer.presentation(), moving.opacity > 0, let presentedCanvas = canvas.presentation() {
+                bounds = bounds.union(moving.convert(moving.bounds, to: presentedCanvas))
+            }
+        }
+        return bounds
+    }
+
+    /// Keep the drawing coordinates fixed, but do not leave a screen-sized, all-Spaces window behind Simple.
+    /// Mission Control can omit other apps from its desktop previews while such a transparent window is present.
+    /// Include the preceding shadows too when an animation has not yet reached the presentation tree.
+    private func fitSimplePanel(to geometry: NotchGeometry, including previous: CGRect) {
+        let bounds = shadowBounds.union(previous)
+        let drawingFrame = Self.panelFrame(for: geometry)
+        let visible = bounds.offsetBy(dx: drawingFrame.minX, dy: drawingFrame.minY).integral.intersection(geometry.screenFrame)
+        let frame = visible.isEmpty ? geometry.rect : visible
+        if panel.frame != frame { panel.setFrame(frame, display: false) }
+        host.setBoundsOrigin(CGPoint(x: panel.frame.minX - drawingFrame.minX, y: panel.frame.minY - drawingFrame.minY))
     }
 
     /// Keeps a backdrop to `column`, dying away over `margin` on each side. Passing no column removes the
@@ -396,7 +424,11 @@ final class GlowWindowController {
         materialsPending: Bool = false
     ) {
         let frame = Self.panelFrame(for: geometry)
-        if panel.frame != frame { panel.setFrame(frame, display: false) }
+        let previousShadows = geometry.mode == .simple && (animated || animatesShells) ? shadowBounds : .null
+        if geometry.mode != .simple {
+            if panel.frame != frame { panel.setFrame(frame, display: false) }
+            host.setBoundsOrigin(.zero)
+        }
         // The host has not been resized to the new panel frame yet; the fade is measured against it directly.
         updateEdgeFade(column: backdrop, margin: Self.logoEdgeMargin(for: geometry), panel: frame, edge: geometry.edge)
         orientCanvas(in: frame, edge: geometry.edge)
@@ -421,7 +453,13 @@ final class GlowWindowController {
                 return
             }
         }
-        if !panel.isVisible { panel.orderFrontRegardless() }
+        if geometry.mode != .simple, !panel.isVisible { panel.orderFrontRegardless() }
+        defer {
+            if geometry.mode == .simple {
+                fitSimplePanel(to: geometry, including: previousShadows)
+                if !panel.isVisible { panel.orderFrontRegardless() }
+            }
+        }
 
         // Opening and collapse commit their window geometry immediately; the worker supplies correctly shaped materials.
         // A previous surface's contour must not be stretched over a different panel while that result is pending.
@@ -511,8 +549,10 @@ final class GlowWindowController {
     /// and the dock's, cut by the card from now on under a see-through look, fades to its new cut with it.
     func updateShells(_ shells: HUDShells, look: HUDLook, geometry: NotchGeometry, animates: Bool) {
         guard look.castsShellShadows else { return }
+        let previousShadows = geometry.mode == .simple && animates ? shadowBounds : .null
         updateShells(shells, look: look, geometry: geometry, frame: Self.panelFrame(for: geometry), prepared: nil,
                      animates: animates, fadesDock: animates)
+        if geometry.mode == .simple { fitSimplePanel(to: geometry, including: previousShadows) }
     }
 
     /// Gives the shells their shadows, or takes them away. A shadow that appears fades in where its shell is, one that

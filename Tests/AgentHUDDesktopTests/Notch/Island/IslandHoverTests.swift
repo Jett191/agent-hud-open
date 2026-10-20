@@ -80,6 +80,29 @@ final class IslandHoverTests: XCTestCase {
         XCTAssertFalse(popup.isVisible || popup.parent != nil, "Collapsing the island must dismiss the forecast")
     }
 
+    @MainActor
+    func testHoverDetailsFollowTheirOwnersMissionControlBehavior() throws {
+        _ = NSApplication.shared
+        let window = OverlayPanel(frame: CGRect(x: -20000, y: -20000, width: 240, height: 40),
+                                  level: .statusBar, acceptsMouse: true)
+        let anchor = IslandHoverAnchorView(content: Text("Details"), look: .standard)
+        window.contentView = anchor
+        window.orderFrontRegardless()
+        defer { anchor.dismiss(); window.orderOut(nil) }
+        let point = CGPoint(x: 20, y: 20)
+        anchor.mouseLocation = { [weak window] in window?.convertPoint(toScreen: point) ?? .zero }
+        anchor.mouseEntered(with: try event(.mouseEntered, window: window, at: point))
+        anchor.update(content: Text("Details"), look: .standard, enabled: true, isHovered: true)
+        let level = try XCTUnwrap(window.childWindows?.first).level
+        for behavior: NSWindow.CollectionBehavior in [.transient, .stationary, .transient] {
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle, behavior]
+            anchor.update(content: Text("Details"), look: .standard, enabled: true, isHovered: true)
+            let popup = try XCTUnwrap(window.childWindows?.first)
+            XCTAssertEqual(popup.collectionBehavior, window.collectionBehavior)
+            XCTAssertEqual(popup.level, level)
+        }
+    }
+
     /// A row's hover details cast a shadow on an opaque island and none on one the desktop shows through, glass or a
     /// solid with a transparency, where a shadow under them would darken them, as the HUD keeps shadows from under its
     /// own see-through shells. The details take a change of look where they are, the shadow with it.
