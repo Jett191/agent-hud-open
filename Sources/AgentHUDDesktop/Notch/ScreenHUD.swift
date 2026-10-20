@@ -1171,6 +1171,12 @@ final class ScreenHUD {
         let open = machine.isOpen
         let previousGeometry = geometry
         geometry = resolveGeometry()
+        // Let Mission Control hide all of Simple's layers together; other modes retain their existing behavior.
+        for panel in [island.panel, glow.panel, dragSurface.panel] {
+            let behavior = panel.collectionBehavior.subtracting([.stationary, .transient])
+                .union(geometry.mode == .simple ? .transient : .stationary)
+            if panel.collectionBehavior != behavior { panel.collectionBehavior = behavior }
+        }
         // A changed edge replaces the coordinate system; it is a repositioning, not an expansion. A detached card moves
         // on its own, inside a window that holds both ends of the move: always on a separated dock, and on any dock
         // while an event's card comes out of its mark, stands beside it or goes back in.

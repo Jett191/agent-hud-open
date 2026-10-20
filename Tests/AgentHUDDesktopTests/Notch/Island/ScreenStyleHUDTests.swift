@@ -48,6 +48,39 @@ final class ScreenStyleHUDTests: XCTestCase {
 
     // MARK: A style draft
 
+    func testSimpleMissionControlBehaviorFollowsModeChangesOnAllLayers() throws {
+        let (store, settings, key, screen) = try make(ScreenPlacement(mode: .simple))
+        let existingWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        let hud = ScreenHUD(key: key, screen: screen, store: store, settings: settings)
+        defer { hud.close() }
+        let drag = try XCTUnwrap(NSApp.windows.first {
+            !existingWindows.contains(ObjectIdentifier($0)) && $0.title == "Move Agent HUD"
+        })
+        let panels = [hud.island.panel, hud.glow.panel, drag]
+        let levels = panels.map(\.level)
+        let shared: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        let other = ScreenHUD(key: "\(key).other", screen: nil, store: store, settings: settings)
+        defer { other.close() }
+        let otherBehavior = other.island.panel.collectionBehavior
+        for mode: HUDMode in [.simple, .notch, .simple, .logos, .simple] {
+            settings.panelLayout.proposeStyle(HUDStyle(mode: mode), for: key, hasNotch: false)
+            hud.apply(animated: false)
+            for open in [false, true, false] {
+                if open { hud.forceOpen() } else { hud.forceCollapse() }
+                for (index, panel) in panels.enumerated() {
+                    XCTAssertEqual(panel.collectionBehavior, shared.union(mode == .simple ? .transient : .stationary),
+                                   "\(mode), open: \(open), \(panel.title)")
+                    XCTAssertEqual(panel.level, levels[index], "Mission Control must not lower the HUD")
+                }
+                if mode == .simple {
+                    XCTAssertNotEqual(hud.glow.panel.frame, screen.frame, "Simple must not leave an all-Spaces screen-sized window")
+                }
+                XCTAssertEqual(other.island.panel.collectionBehavior, otherBehavior, "another screen is independent")
+                XCTAssertEqual(other.glow.panel.collectionBehavior, otherBehavior)
+            }
+        }
+    }
+
     /// A draft re-applies the HUD through the controller that watches the settings and the layouts: a new mode, a new
     /// edge and larger logos each show at once, with nothing opened and nothing written; discarding brings it back.
     func testADraftReappliesTheHUDWithItsModeEdgeAndSizes() throws {
