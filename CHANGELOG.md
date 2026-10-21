@@ -2,6 +2,10 @@
 
 Releases of Agent HUD Open. A version is a git tag `vX.Y.Z` or `vX.Y.Z-beta.N` on `main`; `CFBundleShortVersionString` in `scripts/build-app.sh` carries the three-part numeric version `X.Y.Z`. Each entry lists what changed for people using the application and, under **Host API**, what changed for applications that embed `AgentHUDCore` and `AgentHUDDesktop`. Dates are tag dates.
 
+## Unreleased
+
+- The application icon has the macOS shape: a square with rounded corners on Apple's icon grid, with a clear margin and a soft shadow. macOS 15 and earlier showed the old full-bleed icon as a black square; macOS 26 rounded it on its own and still looks the same.
+
 ## 0.5.5 — 2026-10-18
 
 - Quota window names and their short forms stay in English on every device, independent of the Mac's interface language. An English iPhone, widget or Apple Watch no longer receives Chinese quota names from a Mac using Chinese.
