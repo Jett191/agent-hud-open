@@ -22,7 +22,7 @@
 </p>
 
 > [!NOTE]
-> 本仓库是 Agent HUD 的原生 Swift 版，原名 agent-hud-open，现为 **agent-hud-native-open**。Agent HUD 的跨平台版在 [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open) 继续开发。
+> 本仓库是 Agent HUD 的原生 Swift 版，原名 agent-hud-open，现为 **agent-hud-native-open**。Agent HUD 的跨平台版在 [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open) 继续开发。本仓库只做有限维护，也会加入一些实验性功能。
 
 <p align="center">
   <img src="docs/videos/agent-hud-loop.zh-CN.webp" alt="灵动岛上的 Agent HUD 演示。光晕呼吸着红、黄、绿的额度色段；悬停后面板展开，显示 Claude 与 Codex 的额度、DeepSeek 的余额、过去 24 小时的 Token 与会话，点击后 Claude 的额度切换为消耗速率。随后 Claude 请求运行测试，用「批准一次」回应；它的回复以「有新回复」提醒出现，卡片上有「回到会话」" width="800">
