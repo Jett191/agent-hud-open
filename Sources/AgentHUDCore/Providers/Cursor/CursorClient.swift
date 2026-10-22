@@ -55,23 +55,36 @@ actor CursorClient {
         return Session(account: RecordCoding.hash([user]), cookie: "WorkosCursorSessionToken=\(user)%3A%3A\(token)", token: token)
     }
 
+    /// The dashboard's own read for the current period: `usage-summary` reports zero usage for the unified plans,
+    /// while `GetCurrentPeriodUsage` carries the plan's real percentages.
+    static let periodUsageEndpoint = URL(string: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage")!
+
     func quota() async throws -> ProviderQuota {
         guard FileManager.default.fileExists(atPath: database.path) else { return ProviderQuota() }
         let auth = try session()
         let json = try await http.json(URL(string: "https://cursor.com/api/usage-summary")!, headers: ["Cookie": auth.cookie])
-        var quota = try Self.parseQuota(json)
+        // A failure here only loses the authoritative figures; the summary still stands.
+        let period = try? await http.json(Self.periodUsageEndpoint,
+            headers: ["Authorization": "Bearer \(auth.token)", "Connect-Protocol-Version": "1"], body: .object([:]))
+        var quota = try Self.parseQuota(json, period: period)
         // The session's user id is confirmed by the dashboard accepting it.
         quota.account = ProviderAccount(provider: "Cursor", user: auth.account, workspace: "", evidence: .account)
         quota.label = auth.email
         return quota
     }
 
-    static func parseQuota(_ json: ProviderJSON) throws -> ProviderQuota {
-        guard json["individualUsage"].objectValue != nil || json["teamUsage"].objectValue != nil || json["membershipType"].stringValue != nil else {
+    static func parseQuota(_ json: ProviderJSON, period: ProviderJSON? = nil) throws -> ProviderQuota {
+        guard json["individualUsage"].objectValue != nil || json["teamUsage"].objectValue != nil || json["membershipType"].stringValue != nil
+                || period != nil else {
             throw ProviderFailure.format
         }
-        let end = DateParsing.internet(json["billingCycleEnd"].stringValue)
-        let start = DateParsing.internet(json["billingCycleStart"].stringValue)
+        // `GetCurrentPeriodUsage` is the dashboard's own read and is authoritative where it answers; its cycle
+        // bounds are epoch milliseconds as strings.
+        let usage = period?["planUsage"] ?? .null
+        let end = period?["billingCycleEnd"].stringValue.flatMap { Int64($0) }.map { Date(timeIntervalSince1970: Double($0) / 1000) }
+            ?? DateParsing.internet(json["billingCycleEnd"].stringValue)
+        let start = period?["billingCycleStart"].stringValue.flatMap { Int64($0) }.map { Date(timeIntervalSince1970: Double($0) / 1000) }
+            ?? DateParsing.internet(json["billingCycleStart"].stringValue)
         let duration = ProviderDate.period(start: start, end: end)
         let plan = json["individualUsage"]["plan"]
         func ratio(_ value: ProviderJSON) -> Double? {
@@ -80,16 +93,17 @@ actor CursorClient {
             return used / limit * 100
         }
         var result = ProviderQuota(plan: json["membershipType"].stringValue)
-        let main = plan["enabled"].boolValue == false ? nil : plan["totalPercentUsed"].numberValue ?? ratio(plan)
+        let summaryMain = plan["enabled"].boolValue == false ? nil : plan["totalPercentUsed"].numberValue ?? ratio(plan)
+        let main = usage["totalPercentUsed"].numberValue ?? summaryMain
         // Cursor's own names for its usage pools and limits. Its first pool is its own models, which Cursor calls
         // first-party, so the short name says so, where "Cursor Models" would read as the whole vendor; the other pool,
         // third-party models, follows. The two pools each limit some of the plan's models; the rest are plan-wide.
         let rows: [(String, String, String, Double?)] = [
             ("cursor", "Included usage", "Included", main),
             ("cursor:models", "Cursor Models", "First-party",
-             plan["autoPercentUsed"].numberValue),
+             usage["autoPercentUsed"].numberValue ?? plan["autoPercentUsed"].numberValue),
             ("cursor:third-party", "Other Models", "Third-party",
-             plan["apiPercentUsed"].numberValue),
+             usage["apiPercentUsed"].numberValue ?? plan["apiPercentUsed"].numberValue),
             ("cursor:personal", "Individual spending limit", "Spend limit",
              ratio(json["individualUsage"]["overall"])),
             ("cursor:team", "Pooled usage", "Pooled", ratio(json["teamUsage"]["pooled"])),
