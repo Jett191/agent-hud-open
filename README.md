@@ -21,6 +21,9 @@
   <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a> · <a href="https://agenthud.app">Website</a> · <a href="#supported-agents">Supported agents</a> · <a href="#documentation">Documentation</a>
 </p>
 
+> [!NOTE]
+> This repository is Agent HUD's native Swift app. It was called agent-hud-open and is now **agent-hud-native-open**. Agent HUD continues as a cross-platform app at [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open).
+
 <p align="center">
   <img src="docs/videos/agent-hud-loop.webp" alt="A tour of Agent HUD at a MacBook's notch. The glow breathes in red, yellow and green quota segments. A hover opens the panel on Claude's and Codex's quotas, a DeepSeek balance, the last 24 hours of tokens and the sessions, and a click turns Claude's quotas into burn rates. Claude then asks to run the test suite and is answered with Allow once, and its reply arrives as a New reply reminder whose card offers Return to session" width="800">
 </p>
@@ -166,8 +169,8 @@ See also [data access](docs/data-access.md).
 **Requirements:** macOS 14+ and Xcode or the Xcode Command Line Tools with a Swift 6 toolchain.
 
 ```sh
-git clone https://github.com/jazzenchen/agent-hud-open.git
-cd agent-hud-open
+git clone https://github.com/jazzenchen/agent-hud-native-open.git
+cd agent-hud-native-open
 make check
 make test
 make run
@@ -200,10 +203,10 @@ CI checks source boundaries, runs unit tests, builds the app and verifies its si
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=jazzenchen%2Fagent-hud-open&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=jazzenchen%2Fagent-hud-native-open&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=jazzenchen/agent-hud-open&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=jazzenchen/agent-hud-open&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=jazzenchen/agent-hud-open&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=jazzenchen/agent-hud-native-open&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=jazzenchen/agent-hud-native-open&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=jazzenchen/agent-hud-native-open&type=date&legend=top-left" />
  </picture>
 </a>

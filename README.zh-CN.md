@@ -21,6 +21,9 @@
   <a href="README.md">English</a> · <strong>简体中文</strong> · <a href="https://agenthud.app">官网</a> · <a href="#支持的-agent">支持的 agent</a> · <a href="#文档">文档</a>
 </p>
 
+> [!NOTE]
+> 本仓库是 Agent HUD 的原生 Swift 版，原名 agent-hud-open，现为 **agent-hud-native-open**。Agent HUD 的跨平台版在 [jazzenchen/agent-hud-open](https://github.com/jazzenchen/agent-hud-open) 继续开发。
+
 <p align="center">
   <img src="docs/videos/agent-hud-loop.zh-CN.webp" alt="灵动岛上的 Agent HUD 演示。光晕呼吸着红、黄、绿的额度色段；悬停后面板展开，显示 Claude 与 Codex 的额度、DeepSeek 的余额、过去 24 小时的 Token 与会话，点击后 Claude 的额度切换为消耗速率。随后 Claude 请求运行测试，用「批准一次」回应；它的回复以「有新回复」提醒出现，卡片上有「回到会话」" width="800">
 </p>
@@ -166,8 +169,8 @@ Devin 的每日与每周额度来自 CLI 的本机缓存；需在 CLI 中刷新�
 **环境要求：** macOS 14+，以及包含 Swift 6 工具链的 Xcode 或 Xcode 命令行工具。
 
 ```sh
-git clone https://github.com/jazzenchen/agent-hud-open.git
-cd agent-hud-open
+git clone https://github.com/jazzenchen/agent-hud-native-open.git
+cd agent-hud-native-open
 make check
 make test
 make run
@@ -200,10 +203,10 @@ Swift 包提供 `AgentHUDSupport`（记录与身份）、`AgentHUDCore`（数据
 
 ## Star 历史
 
-<a href="https://www.star-history.com/?repos=jazzenchen%2Fagent-hud-open&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=jazzenchen%2Fagent-hud-native-open&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=jazzenchen/agent-hud-open&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=jazzenchen/agent-hud-open&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=jazzenchen/agent-hud-open&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=jazzenchen/agent-hud-native-open&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=jazzenchen/agent-hud-native-open&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=jazzenchen/agent-hud-native-open&type=date&legend=top-left" />
  </picture>
 </a>
