@@ -153,6 +153,41 @@ final class ClaudeTranscriptTests: XCTestCase {
         XCTAssertEqual(fast.map(\.model), slow.map(\.model))
     }
 
+    /// Issue 138: an Anthropic-compatible provider can write the message's own fields after its content, which a long
+    /// thinking block or answer pushes past the prefix.
+    func testFastParserReadsMessageFieldsWrittenAfterTheContent() throws {
+        let body = String(repeating: "x", count: 5000)
+        let tail = #""requestId":"req_k","type":"assistant","uuid":"u","timestamp":"2026-10-22T12:00:00.000Z","cwd":"/p","sessionId":"s-k""#
+        // The model follows the content, the role precedes it.
+        let modelAfter = #"{"parentUuid":"p","isSidechain":false,"message":{"id":"msg_k1","type":"message","role":"assistant","content":[{"type":"thinking","thinking":"\#(body)","signature":""}],"model":"kimi-k2.7","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":700}},\#(tail)}"#
+        // Every field follows the content, in alphabetical order.
+        let allAfter = #"{"parentUuid":"p","isSidechain":false,"message":{"content":[{"type":"text","text":"\#(body)"}],"container":{"id":"cntr_1"},"id":"msg_k2","model":"kimi-k2.7","role":"assistant","stop_reason":"end_turn","stop_sequence":null,"type":"message","usage":{"input_tokens":20,"output_tokens":300}},\#(tail)}"#
+        // A short message whose tool call carries a model and a role of its own, inside the prefix.
+        let callFields = #"{"parentUuid":"p","isSidechain":false,"message":{"id":"msg_k3","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Agent","input":{"model":"haiku","role":"user","prompt":"look"}}],"model":"kimi-k2.7","stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":30,"output_tokens":40}},\#(tail)}"#
+        // Anthropic's order, with the same tool call after the model.
+        let anthropic = #"{"parentUuid":"p","isSidechain":false,"message":{"model":"claude-opus-5-5","id":"msg_a1","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Agent","input":{"model":"haiku","role":"user","prompt":"\#(body)"}}],"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":2}},\#(tail)}"#
+        // Claude Code's own message after an API error: usage before the content, a field after it.
+        let synthetic = #"{"parentUuid":"p","isSidechain":false,"type":"assistant","uuid":"u","timestamp":"2026-10-22T12:00:00.000Z","message":{"id":"8b281180","container":null,"model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence","type":"message","usage":{"input_tokens":0,"output_tokens":0},"content":[{"type":"text","text":"You've hit your session limit"}],"context_management":null},"isApiErrorMessage":true,"sessionId":"s-k"}"#
+        let lines = [modelAfter, allAfter, callFields, anthropic, synthetic].joined(separator: "\n") + "\n"
+        let fast = FastTranscriptParser.parse(Data(lines.utf8))
+        let slow = ClaudeTranscriptParser.parse(lines)
+        XCTAssertEqual(fast.map(\.role), [.assistant, .assistant, .assistant, .assistant, .assistant])
+        XCTAssertEqual(fast.map(\.model), ["kimi-k2.7", "kimi-k2.7", "kimi-k2.7", "claude-opus-5-5", "<synthetic>"],
+                       "a tool call's own model is not the message's")
+        XCTAssertEqual(fast.map(\.messageId), ["msg_k1", "msg_k2", "msg_k3", "msg_a1", "8b281180"], "a container's id is not the message's")
+        XCTAssertEqual(fast.map(\.messageId), slow.map(\.messageId))
+        XCTAssertEqual(fast.map(\.outputTokens), [700, 300, 40, 2, 0])
+        XCTAssertEqual(fast.map(\.role), slow.map(\.role))
+        XCTAssertEqual(fast.map(\.model), slow.map(\.model))
+        XCTAssertEqual(fast.map(\.outputTokens), slow.map(\.outputTokens))
+        XCTAssertEqual(fast.map(\.stopReason), slow.map(\.stopReason))
+        XCTAssertEqual(fast.map(\.toolName), [nil, nil, "Agent", "Agent", nil])
+        var accumulator = TranscriptAccumulator(path: "/p/s-k.jsonl", isSubagent: false)
+        XCTAssertEqual(accumulator.ingest(fast).map(\.agentId),
+                       ["claude-model:kimi-k2.7", "claude-model:kimi-k2.7", "claude-model:kimi-k2.7", "claude-model:claude-opus-5-5"],
+                       "every response is counted, under the model that answered")
+    }
+
     func testTurnStateEndsSessionsAtEndTurnOrInterruptionAndKeepsTheQuietLogFallback() throws {
         let base = DateParsing.iso8601("2026-09-07T06:00:00Z")!
         let iso = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
