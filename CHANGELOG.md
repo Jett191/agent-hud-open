@@ -4,6 +4,8 @@ Releases of Agent HUD Open. A version is a git tag `vX.Y.Z` or `vX.Y.Z-beta.N` o
 
 ## Unreleased
 
+- Claude Code tokens from a model behind an Anthropic-compatible endpoint, such as Kimi, count under that model. Such an endpoint can write a response's model, or every field of its own, after the response's content, and a long thinking block or answer pushed them past the part of the line Agent HUD read: the response's tokens went to a model named Unknown, or into no total at all, and a tool call in it that named a model, such as a subagent's, could lend the response that name. Claude's own models were not affected. ([#138](https://github.com/jazzenchen/agent-hud-native-open/issues/138))
+- Host API: `FastTranscriptParser` reads a message's `role`, `model` and `id` from its fields before the content, and from those after it when the API wrote them there, as `ClaudeTranscriptParser` does.
 - The application icon has the macOS shape: a square with rounded corners on Apple's icon grid, with a clear margin and a soft shadow. macOS 15 and earlier showed the old full-bleed icon as a black square; macOS 26 rounded it on its own and still looks the same.
 
 ## 0.5.5 — 2026-10-18

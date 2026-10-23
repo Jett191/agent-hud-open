@@ -8,6 +8,8 @@ import Foundation
 /// `requestId`, `timestamp` at the end, with the (possibly huge) message content in between. Early keys are
 /// searched in a bounded prefix and late keys backwards, so a 500 KB tool result costs almost nothing.
 /// Current builds write `type`, `cwd` and `sessionId` after the message; older builds wrote them first.
+/// The message's own fields keep the order of the API that answered: Anthropic's writes them before the content,
+/// while some compatible providers write `model`, or all of them, after it (`messageFields`).
 public enum FastTranscriptParser {
     private static let prefixLength = 2048
     /// How much of an assistant message is kept. Readers truncate further; this only bounds the work of reading it.
@@ -31,6 +33,8 @@ public enum FastTranscriptParser {
     private static let modelKey = Array("\"model\":\"".utf8)
     private static let messageIdKey = Array("\"message\":{\"id\":\"".utf8)
     private static let fallbackIdKey = Array("\"id\":\"msg_".utf8)
+    private static let messageKey = Array("\"message\":{".utf8)
+    private static let contentKey = Array("\"content\":".utf8)
     private static let requestIdKey = Array("\"requestId\":\"".utf8)
     private static let sessionIdKey = Array("\"sessionId\":\"".utf8)
     private static let cwdKey = Array("\"cwd\":\"".utf8)
@@ -138,13 +142,22 @@ public enum FastTranscriptParser {
               let timestamp = ISO8601Fast.parse(timestampText)
         else { return nil }
         let head = UnsafeRawBufferPointer(rebasing: line[0..<min(prefixLength, line.count)])
+        // The line up to the first content: the message's own fields when the API wrote them first, and never a tool
+        // call's input, which can carry keys of the same names.
+        let header = UnsafeRawBufferPointer(rebasing: head[0..<(find(contentKey, in: head) ?? head.count)])
+        // The fields the message wrote after its content, read only when the header lacks one.
+        var trailing: [String: Any]??
+        func trailingField(_ name: String) -> String? {
+            if trailing == nil { trailing = .some(messageFields(in: line, head: head)) }
+            return trailing??[name] as? String
+        }
         let role: TranscriptEvent.Role
-        // The message role precedes the content in every format; the assistant marker is checked first because
-        // a tool call's input may legitimately contain a `role` argument.
-        if find(assistantRoleMarker, in: head) != nil || find(assistantMarker, in: head) != nil {
+        if find(assistantRoleMarker, in: header) != nil || find(assistantMarker, in: header) != nil {
             role = .assistant
-        } else if find(userRoleMarker, in: head) != nil || find(userMarker, in: head) != nil {
+        } else if find(userRoleMarker, in: header) != nil || find(userMarker, in: header) != nil {
             role = .user
+        } else if let own = trailingField("role") {
+            role = own == "assistant" ? .assistant : own == "user" ? .user : .other
         } else {
             role = .other
         }
@@ -161,8 +174,9 @@ public enum FastTranscriptParser {
                 output = count(usage["output_tokens"])
                 thinking = count((usage["output_tokens_details"] as? [String: Any])?["thinking_tokens"])
             }
-            model = value(after: modelKey, in: head)
-            messageId = value(after: messageIdKey, in: head) ?? value(after: fallbackIdKey, in: head).map { "msg_" + $0 }
+            model = value(after: modelKey, in: line, keyIn: header) ?? trailingField("model")
+            messageId = value(after: messageIdKey, in: line, keyIn: head)
+                ?? value(after: fallbackIdKey, in: line, keyIn: header).map { "msg_" + $0 } ?? trailingField("id")
             requestId = value(after: requestIdKey, in: line, backwards: true)
             // The message-level reason follows the content, so the last occurrence is the real one.
             stopReason = stringValue(after: stopReasonKey, in: line)
@@ -366,10 +380,42 @@ public enum FastTranscriptParser {
         return object(at: keyOffset + usageKey.count - 1, in: line)
     }
 
+    /// The message's own fields written after its content, as some Anthropic-compatible providers order them:
+    /// `{"id":…,"role":"assistant","content":[…],"model":…,"usage":{…}}`, or every field after it. They lie between
+    /// the content's end and the message's, a short span parsed as JSON; nil when the message's content or end is not
+    /// found, or nothing follows the content.
+    private static func messageFields(in line: UnsafeRawBufferPointer, head: UnsafeRawBufferPointer) -> [String: Any]? {
+        guard let message = find(messageKey, in: head) else { return nil }
+        let fields = message + messageKey.count
+        guard let key = find(contentKey, in: UnsafeRawBufferPointer(rebasing: head[fields...])) else { return nil }
+        var start = fields + key + contentKey.count
+        while start < line.count, line[start] == UInt8(ascii: " ") { start += 1 }
+        guard start < line.count, [UInt8(ascii: "["), UInt8(ascii: "{"), UInt8(ascii: "\"")].contains(line[start]) else { return nil }
+        let contentEnd = closing(from: start, depth: 0, in: line, stringOnly: line[start] == UInt8(ascii: "\""))
+        guard let contentEnd, let messageEnd = closing(from: contentEnd + 1, depth: 1, in: line) else { return nil }
+        var rest = UnsafeRawBufferPointer(rebasing: line[(contentEnd + 1)..<messageEnd])
+        while let first = rest.first, first == UInt8(ascii: ",") || first == UInt8(ascii: " ") {
+            rest = UnsafeRawBufferPointer(rebasing: rest[(rest.startIndex + 1)...])
+        }
+        guard !rest.isEmpty else { return nil }
+        var object = Data("{".utf8)
+        object.append(contentsOf: rest)
+        object.append(contentsOf: Data("}".utf8))
+        return try? JSONSerialization.jsonObject(with: object) as? [String: Any]
+    }
+
     /// The JSON object whose opening brace is at `open`, as a dictionary (brace-matched slice fed to JSONSerialization).
     private static func object(at open: Int, in line: UnsafeRawBufferPointer) -> [String: Any]? {
-        var depth = 0
-        var index = open
+        guard let close = closing(from: open, depth: 0, in: line) else { return nil }
+        let slice = Data(UnsafeRawBufferPointer(rebasing: line[open...close]))
+        return try? JSONSerialization.jsonObject(with: slice) as? [String: Any]
+    }
+
+    /// Scanning from `start` with `depth` brackets already open, the index of the bracket that closes the last of them,
+    /// strings skipped. With `stringOnly`, `start` is a string's opening quote and the index is its closing one.
+    private static func closing(from start: Int, depth: Int, in line: UnsafeRawBufferPointer, stringOnly: Bool = false) -> Int? {
+        var depth = depth
+        var index = start
         var inString = false
         var escaped = false
         while index < line.count {
@@ -381,17 +427,15 @@ public enum FastTranscriptParser {
                     escaped = true
                 } else if byte == UInt8(ascii: "\"") {
                     inString = false
+                    if stringOnly { return index }
                 }
             } else if byte == UInt8(ascii: "\"") {
                 inString = true
-            } else if byte == UInt8(ascii: "{") {
+            } else if byte == UInt8(ascii: "{") || byte == UInt8(ascii: "[") {
                 depth += 1
-            } else if byte == UInt8(ascii: "}") {
+            } else if byte == UInt8(ascii: "}") || byte == UInt8(ascii: "]") {
                 depth -= 1
-                if depth == 0 {
-                    let slice = Data(UnsafeRawBufferPointer(rebasing: line[open...index]))
-                    return try? JSONSerialization.jsonObject(with: slice) as? [String: Any]
-                }
+                if depth == 0 { return index }
             }
             index += 1
         }
